@@ -79,7 +79,7 @@ impl<'hir> TypeChecker<'hir> {
         }
     }
 
-    pub(crate) fn check(
+    pub fn check(
         &mut self,
         hir: &'hir mut HirModule<'hir>,
     ) -> HirResult<&'hir mut HirModule<'hir>> {

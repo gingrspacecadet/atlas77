@@ -42,7 +42,7 @@ use crate::atlas_c::atlas_frontend::parser::ast::{
 use crate::atlas_c::utils::{Span, get_file_content};
 use arena::AstArena;
 
-pub(crate) struct Parser<'ast> {
+pub struct Parser<'ast> {
     arena: &'ast AstArena<'ast>,
     tokens: Vec<Token>,
     //for error reporting

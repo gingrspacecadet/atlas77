@@ -159,7 +159,7 @@ impl CCodeGen {
             // For union types, we don't use pointers for now
             LirTy::UnionType(name) => name.to_string(),
             LirTy::ArrayTy { inner, size } => format!("{}[{}]", self.codegen_type(inner), size),
-            _ => unimplemented!("Type codegen not implemented for {:?}", ty),
+            /* _ => unimplemented!("Type codegen not implemented for {:?}", ty), */
         }
     }
 

@@ -1410,7 +1410,7 @@ impl std::fmt::Display for LirTy {
             LirTy::Char => write!(f, "char"),
             LirTy::Str => write!(f, "str"),
             LirTy::Unit => write!(f, "unit"),
-            LirTy::Ptr { is_const, inner } => write!(f, "ptr<{}>", inner),
+            LirTy::Ptr { is_const: _, inner } => write!(f, "ptr<{}>", inner),
             LirTy::StructType(name) => write!(f, "struct {}", name),
             LirTy::UnionType(name) => write!(f, "union {}", name),
             LirTy::ArrayTy { inner, size } => write!(f, "[{}; {}]", inner, size),

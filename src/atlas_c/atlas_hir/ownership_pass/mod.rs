@@ -12,7 +12,7 @@
 //! - **Explicit over implicit:** No automatic moves, require `std::move()`
 //! - **Zero-cost abstractions:** Trivial types bypass tracking entirely
 
-pub(crate) mod context;
+pub mod context;
 
 use crate::atlas_c::atlas_hir::arena::HirArena;
 use crate::atlas_c::atlas_hir::error::{

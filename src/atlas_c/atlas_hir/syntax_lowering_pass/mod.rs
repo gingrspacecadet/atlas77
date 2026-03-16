@@ -23,10 +23,9 @@ use crate::atlas_c::{
         error::{
             AssignmentCannotBeAnExpressionError, CannotGenerateADestructorForThisTypeError,
             ConstructorCannotHaveAWhereClauseError, HirError, HirResult,
-            IncorrectIntrinsicCallArgumentsError, NonConstantValueError, NotEnoughArgumentsOrigin,
-            NotEnoughGenericsError, NullableTypeRequiresStdLibraryError,
-            StructNameCannotBeOneLetterError, UnknownFileImportError, UnknownTypeError,
-            UnsupportedExpr, UnsupportedItemError, UselessError,
+            IncorrectIntrinsicCallArgumentsError, NonConstantValueError,
+            NullableTypeRequiresStdLibraryError, StructNameCannotBeOneLetterError,
+            UnknownFileImportError, UnsupportedExpr, UnsupportedItemError, UselessError,
         },
         expr::{
             HirBinaryOpExpr, HirBinaryOperator, HirBooleanLiteralExpr, HirCastExpr,
@@ -156,7 +155,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     .insert(class.name, self.arena.intern(class.signature.clone()));
                 self.module_body.structs.insert(class.name, class);
             }
-            AstItem::ExternStruct(ast_struct) => {}
+            AstItem::ExternStruct(_ast_struct) => {}
             AstItem::Import(ast_import) => match self.visit_import(ast_import) {
                 Ok((hir_module, mut generic_pool)) => {
                     let allocated_hir: &'hir HirModule<'hir> = self.arena.intern(hir_module);

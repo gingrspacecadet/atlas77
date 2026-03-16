@@ -35,7 +35,7 @@ pub enum HirExpr<'hir> {
 }
 
 impl<'hir> HirExpr<'hir> {
-    pub(crate) fn span(&self) -> Span {
+    pub fn span(&self) -> Span {
         match self {
             HirExpr::Ident(expr) => expr.span,
             HirExpr::IntegerLiteral(expr) => expr.span,

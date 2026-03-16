@@ -2,8 +2,7 @@ use miette::NamedSource;
 
 use crate::atlas_c::atlas_hir::arena::HirArena;
 use crate::atlas_c::atlas_hir::error::{
-    HirError, TooManyReferenceLevelsError, TypeDoesNotImplementRequiredConstraintError,
-    TypeDoesNotImplementRequiredConstraintOrigin,
+    TypeDoesNotImplementRequiredConstraintError, TypeDoesNotImplementRequiredConstraintOrigin,
 };
 use crate::atlas_c::atlas_hir::monomorphization_pass::MonomorphizationPass;
 use crate::atlas_c::atlas_hir::signature::{

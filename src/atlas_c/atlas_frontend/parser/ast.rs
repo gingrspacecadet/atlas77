@@ -498,7 +498,7 @@ pub enum AstExpr<'ast> {
 }
 
 impl AstExpr<'_> {
-    pub(crate) fn span(&self) -> Span {
+    pub fn span(&self) -> Span {
         match self {
             AstExpr::Lambda(e) => e.span,
             AstExpr::ConstExpr(e) => e.span,
@@ -520,7 +520,7 @@ impl AstExpr<'_> {
             AstExpr::Casting(e) => e.span,
         }
     }
-    pub(crate) fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> &'static str {
         match self {
             AstExpr::Lambda(_) => "Lambda",
             AstExpr::ConstExpr(_) => "ConstExpr",
@@ -740,7 +740,7 @@ pub enum AstLiteral<'ast> {
 }
 
 impl AstLiteral<'_> {
-    pub(crate) fn span(&self) -> Span {
+    pub fn span(&self) -> Span {
         match self {
             AstLiteral::Integer(l) => l.span,
             AstLiteral::UnsignedInteger(l) => l.span,
@@ -834,7 +834,7 @@ pub enum AstType<'ast> {
 }
 
 impl AstType<'_> {
-    pub(crate) fn span(&self) -> Span {
+    pub fn span(&self) -> Span {
         match self {
             AstType::Unit(t) => t.span,
             AstType::Boolean(t) => t.span,

@@ -16,7 +16,7 @@ use crate::atlas_c::{
     utils::{self, Span},
 };
 use miette::NamedSource;
-pub(crate) mod generic_pool;
+pub mod generic_pool;
 
 //Maybe all the passes should share a common trait? Or be linked to a common context struct?
 pub struct MonomorphizationPass<'hir> {
