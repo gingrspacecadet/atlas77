@@ -6,7 +6,7 @@ public fun println(s: string) {
 
 //! Read a line from standard input
 //! Example: let input = input()
-//public extern input() -> string;
+//public extern fun input() -> string;
 //! Panic the program with a value
 //! Example: panic("Something went wrong!")
 public extern fun panic<T>(s: T);

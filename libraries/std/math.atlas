@@ -2,10 +2,10 @@
 //!
 //! Provides a small set of helpers and wrappers around platform math functions.
 //! Example: `let r = math::round(3.7)`
-public extern round(x: float64) -> int64;
-public extern random(min: int64, max: int64) -> int64;
-public extern sin_f(x: float64) -> float64;
-public extern cos_f(x: float64) -> float64;
+public extern fun round(x: float64) -> int64;
+public extern fun random(min: int64, max: int64) -> int64;
+public extern fun sin_f(x: float64) -> float64;
+public extern fun cos_f(x: float64) -> float64;
 
 public fun abs(x: int64) -> int64 {
     if x < 0 {
