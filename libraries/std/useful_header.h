@@ -141,14 +141,15 @@ extern inline const char *__atlas77_c_to_chars(const string s)
 /* NB: This is an array of char with a null terminated string for now */
 extern inline string __atlas77_c_from_chars(const char *chars)
 {
-    uint64_t len = strlen(chars);
-    char *my_str = (char *)malloc(len * sizeof(char));
+    uint64_t length = strlen(chars);
+    char *my_str = (char *)malloc((length + 1) * sizeof(char));
     strcpy(my_str, chars);
 
-    return {
-        .len = len,
-        .data = my_str,
-    };
+    string my_string;
+    my_string.len = length;
+    my_string.data = my_str;
+
+    return my_string;
 }
 
 #endif /* ATLAS77_USEFUL_HEADER_H */
