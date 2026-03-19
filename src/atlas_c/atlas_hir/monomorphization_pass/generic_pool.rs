@@ -163,25 +163,6 @@ impl<'hir> HirGenericPool<'hir> {
                         self.register_struct_instance(g.clone(), module);
                     }
                 }
-                HirTy::Reference(r) => match r.inner {
-                    HirTy::Named(n) => {
-                        // Check if this is actually a defined struct/union in the module
-                        if n.name.len() == 1
-                            && !module.structs.contains_key(n.name)
-                            && !module.unions.contains_key(n.name)
-                        {
-                            is_instantiated = false;
-                        }
-                    }
-                    HirTy::Generic(g) => {
-                        if !self.is_generic_instantiated(g, module) {
-                            is_instantiated = false;
-                        } else {
-                            self.register_struct_instance(g.clone(), module);
-                        }
-                    }
-                    _ => continue,
-                },
                 HirTy::PtrTy(p) => match p.inner {
                     HirTy::Named(n) => {
                         // Check if this is actually a defined struct/union in the module
@@ -317,8 +298,6 @@ impl<'hir> HirGenericPool<'hir> {
             | HirTy::String(_)
             | HirTy::UnsignedInteger(_)
             | HirTy::PtrTy(_)
-            // References are copyable as they are just pointers
-            | HirTy::Reference(_)
             // Function pointers are copyable, though I am still not sure if I want this behavior...
             // Maybe closures that capture environment shouldn't be copyable?
             | HirTy::Function(_) => true,
@@ -359,8 +338,7 @@ impl<'hir> HirGenericPool<'hir> {
             | HirTy::Char(_)
             | HirTy::String(_)
             | HirTy::UnsignedInteger(_)
-            // References are moveable as they are just pointers
-            | HirTy::Reference(_)
+            | HirTy::PtrTy(_)
             // Function pointers are moveable
             | HirTy::Function(_) => true,
             // For now we consider lists as moveable until we have a better way to handle them

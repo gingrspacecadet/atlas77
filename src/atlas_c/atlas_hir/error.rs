@@ -61,7 +61,7 @@ declare_error_type! {
         TryingToCreateAnUnionWithMoreThanOneActiveField(TryingToCreateAnUnionWithMoreThanOneActiveFieldError),
         TypeDoesNotImplementRequiredConstraint(TypeDoesNotImplementRequiredConstraintError),
         InvalidSpecialMethodSignature(InvalidSpecialMethodSignatureError),
-        ReturningReferenceToLocalVariable(ReturningReferenceToLocalVariableError),
+        ReturningReferenceToLocalVariable(ReturningPointerToLocalVariableError),
         VariableNameAlreadyDefined(VariableNameAlreadyDefinedError),
         TryingToCopyNonCopyableType(TryingToCopyNonCopyableTypeError),
         DoubleMoveError(DoubleMoveError),
@@ -74,6 +74,7 @@ declare_error_type! {
         TypeIsNotMoveable(TypeIsNotMoveableError),
         RecursiveCopyConstructor(RecursiveCopyConstructorError),
         StdNonCopyableStructCannotHaveCopyConstructor(StdNonCopyableStructCannotHaveCopyConstructorError),
+        StdNonMoveableStructCannotHaveMoveConstructor(StdNonMoveableStructCannotHaveMoveConstructorError),
         CopyConstructorParameterMustBeCopyable(CopyConstructorParameterMustBeCopyableError),
         StructCannotHaveAFieldOfItsOwnType(StructCannotHaveAFieldOfItsOwnTypeError),
         UnionMustHaveAtLeastTwoVariant(UnionMustHaveAtLeastTwoVariantError),
@@ -165,14 +166,14 @@ pub struct TooManyReferenceLevelsError {
 
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(
-    code(sema::returning_reference_to_local_variable),
+    code(sema::returning_pointer_to_local_variable),
     help(
-        "references to local variables cannot be returned because the variable will be dropped when the function returns"
+        "pointers to local variables cannot be returned because the variable will be dropped when the function returns"
     )
 )]
-#[error("cannot return reference to local variable `{var_name}`")]
-pub struct ReturningReferenceToLocalVariableError {
-    #[label = "returns a reference to local variable `{var_name}`"]
+#[error("cannot return pointers to local variable `{var_name}`")]
+pub struct ReturningPointerToLocalVariableError {
+    #[label = "returns a pointer to local variable `{var_name}`"]
     pub span: Span,
     pub var_name: String,
     #[source_code]
@@ -1102,6 +1103,26 @@ pub struct StdNonCopyableStructCannotHaveCopyConstructorError {
     #[label = "copy constructor defined here"]
     pub copy_ctor_span: Span,
     #[label = "`std::non_copyable` flag set here"]
+    pub flag_span: Span,
+    #[source_code]
+    pub src: NamedSource<String>,
+    pub struct_name: String,
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(
+    code(sema::std_non_moveable_struct_cannot_have_move_constructor),
+    help(
+        "structs marked as `std::non_moveable` are not allowed to have move constructors. Remove either the move constructor or the `std::non_moveable` attribute."
+    )
+)]
+#[error(
+    "struct `{struct_name}` is marked as `std::non_moveable` and cannot have a move constructor"
+)]
+pub struct StdNonMoveableStructCannotHaveMoveConstructorError {
+    #[label = "move constructor defined here"]
+    pub copy_ctor_span: Span,
+    #[label = "`std::non_moveable` flag set here"]
     pub flag_span: Span,
     #[source_code]
     pub src: NamedSource<String>,

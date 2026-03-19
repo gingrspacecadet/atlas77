@@ -15,4 +15,14 @@ fun main() {
     printf("%ld\n", fib(40));
     let elapsed = timer_elapsed_s(start_time);
     printf("%f\n", elapsed);
+    let t = 0;
+    ptr_test(&t);
+}
+
+fun ptr_test(t: *int64)
+{
+    *t = 42;
+    printf("%ld\n", *t);
+    let b = 5;
+    return &b;
 }

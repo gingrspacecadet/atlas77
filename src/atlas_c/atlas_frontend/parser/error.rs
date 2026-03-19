@@ -21,10 +21,27 @@ declare_error_type! {
         FlagDoesntExist(FlagDoesntExistError),
         SizeOfArrayMustBeKnownAtCompileTime(SizeOfArrayMustBeKnownAtCompileTimeError),
         MutableSelfReferenceConstructor(MutableSelfReferenceConstructorError),
+        ConstTypeNotSupportedYet(ConstTypeNotSupportedYetError),
     }
 }
 
 pub type ParseResult<T> = Result<T, Box<SyntaxError>>;
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(
+    code(syntax::const_type_is_not_supported),
+    help("Only const pointers exist for now")
+)]
+#[error(
+    "const types (i.e.: `const T`) are not supported yet. The compilation will continue, but the constraint will be ignored"
+)]
+pub struct ConstTypeNotSupportedYetError {
+    #[label = "This type: `{ty}` is not supported yet."]
+    pub span: Span,
+    #[source_code]
+    pub src: NamedSource<String>,
+    pub ty: String,
+}
 
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(

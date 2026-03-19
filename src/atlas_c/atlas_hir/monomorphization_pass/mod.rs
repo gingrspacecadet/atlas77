@@ -11,7 +11,7 @@ use crate::atlas_c::{
         monomorphization_pass::generic_pool::HirGenericPool,
         signature::{HirGenericConstraint, HirGenericConstraintKind, HirModuleSignature},
         stmt::HirStatement,
-        ty::{HirGenericTy, HirInlineArrayTy, HirPtrTy, HirReferenceTy, HirSliceTy, HirTy},
+        ty::{HirGenericTy, HirInlineArrayTy, HirPtrTy, HirSliceTy, HirTy},
     },
     utils::{self, Span},
 };
@@ -1044,15 +1044,10 @@ impl<'hir> MonomorphizationPass<'hir> {
             }
             HirTy::PtrTy(ptr_ty) => {
                 let new_inner = self.swap_generic_types_in_ty(ptr_ty.inner, types_to_change);
-                self.arena
-                    .intern(HirTy::PtrTy(HirPtrTy { inner: new_inner }))
-            }
-            HirTy::Reference(r_ty) => {
-                let new_inner = self.swap_generic_types_in_ty(r_ty.inner, types_to_change);
-                self.arena.intern(HirTy::Reference(HirReferenceTy {
+                self.arena.intern(HirTy::PtrTy(HirPtrTy {
                     inner: new_inner,
-                    kind: r_ty.kind,
-                    span: r_ty.span,
+                    is_const: ptr_ty.is_const,
+                    span: ptr_ty.span,
                 }))
             }
             _ => ty,
@@ -1181,11 +1176,8 @@ impl<'hir> MonomorphizationPass<'hir> {
             }
             HirTy::PtrTy(ptr_ty) => self.arena.intern(HirTy::PtrTy(HirPtrTy {
                 inner: self.change_inner_type(ptr_ty.inner, generic_name, new_type, module),
-            })),
-            HirTy::Reference(r_ty) => self.arena.intern(HirTy::Reference(HirReferenceTy {
-                inner: self.change_inner_type(r_ty.inner, generic_name, new_type, module),
-                kind: r_ty.kind,
-                span: r_ty.span,
+                is_const: ptr_ty.is_const,
+                span: ptr_ty.span,
             })),
             _ => type_to_change,
         }

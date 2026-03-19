@@ -1,4 +1,3 @@
-use crate::atlas_c::atlas_frontend::parser::ast::AstReferenceKind;
 use crate::atlas_c::atlas_hir::signature::HirModuleSignature;
 use crate::atlas_c::utils::Span;
 use std::fmt;
@@ -22,7 +21,6 @@ const NULLABLE_TY_ID: u8 = 0x40;
 const UNINITIALIZED_TY_ID: u8 = 0x50;
 const NAMED_TY_ID: u8 = 0x60;
 const GENERIC_TY_ID: u8 = 0x70;
-const REFERENCE_TY_ID: u8 = 0x80;
 const POINTER_TY_ID: u8 = 0x90;
 
 impl HirTyId {
@@ -111,15 +109,9 @@ impl HirTyId {
         Self(hasher.finish())
     }
 
-    pub fn compute_ref_ty_id(inner: &HirTyId, kind: HirReferenceKind) -> Self {
+    pub fn compute_pointer_ty_id(inner: &HirTyId, is_const: bool) -> Self {
         let mut hasher = DefaultHasher::new();
-        (REFERENCE_TY_ID, kind, inner).hash(&mut hasher);
-        Self(hasher.finish())
-    }
-
-    pub fn compute_pointer_ty_id(inner: &HirTyId) -> Self {
-        let mut hasher = DefaultHasher::new();
-        (POINTER_TY_ID, inner).hash(&mut hasher);
+        (POINTER_TY_ID, is_const, inner).hash(&mut hasher);
         Self(hasher.finish())
     }
 }
@@ -144,13 +136,14 @@ impl<'hir> From<&'hir HirTy<'hir>> for HirTyId {
                 let params = g.inner.iter().map(HirTyId::from).collect::<Vec<_>>();
                 HirTyId::compute_generic_ty_id(g.name, &params)
             }
-            HirTy::PtrTy(ptr_ty) => HirTyId::compute_pointer_ty_id(&HirTyId::from(ptr_ty.inner)),
+            HirTy::PtrTy(ptr_ty) => {
+                HirTyId::compute_pointer_ty_id(&HirTyId::from(ptr_ty.inner), ptr_ty.is_const)
+            }
             HirTy::Function(f) => {
                 let parameters = f.params.iter().map(HirTyId::from).collect::<Vec<_>>();
                 let ret_ty = HirTyId::from(f.ret_ty);
                 HirTyId::compute_function_ty_id(&ret_ty, &parameters)
             }
-            HirTy::Reference(r) => HirTyId::compute_ref_ty_id(&HirTyId::from(r.inner), r.kind),
         }
     }
 }
@@ -171,28 +164,27 @@ pub enum HirTy<'hir> {
     Generic(HirGenericTy<'hir>),
     Function(HirFunctionTy<'hir>),
     PtrTy(HirPtrTy<'hir>),
-    Reference(HirReferenceTy<'hir>),
 }
 
 impl HirTy<'_> {
-    pub fn is_const(&self) -> bool {
-        matches!(
-            self,
-            HirTy::Reference(HirReferenceTy {
-                kind: HirReferenceKind::ReadOnly,
-                ..
-            })
-        )
+    /// Returns true if this is a const pointer type (*const T)
+    pub fn is_const_ptr(&self) -> bool {
+        matches!(self, HirTy::PtrTy(p) if p.is_const)
     }
-    pub fn is_ref(&self) -> bool {
-        matches!(self, HirTy::Reference(_))
+
+    /// Returns true if this is a mutable pointer type (*T)
+    pub fn is_mutable_ptr(&self) -> bool {
+        matches!(self, HirTy::PtrTy(p) if !p.is_const)
     }
-    pub fn get_inner_ref_ty(&self) -> Option<&HirTy<'_>> {
+
+    /// Returns the inner type of a pointer type, if this is a pointer
+    pub fn get_inner_ptr_ty(&self) -> Option<&HirTy<'_>> {
         match self {
-            HirTy::Reference(ref_ty) => Some(ref_ty.inner),
+            HirTy::PtrTy(ptr_ty) => Some(ptr_ty.inner),
             _ => None,
         }
     }
+
     pub fn is_unit(&self) -> bool {
         matches!(self, HirTy::Unit(_))
     }
@@ -231,7 +223,8 @@ impl HirTy<'_> {
                     false
                 }
             }
-            HirTy::Reference(_) => true,
+            // Pointers are trivially copyable (they're just addresses)
+            HirTy::PtrTy(_) => true,
             _ => false,
         }
     }
@@ -257,7 +250,8 @@ impl HirTy<'_> {
                     false
                 }
             }
-            HirTy::Reference(_) => true,
+            // Pointers are trivially moveable
+            HirTy::PtrTy(_) => true,
             _ => false,
         }
     }
@@ -297,7 +291,13 @@ impl HirTy<'_> {
                     format!("{}_{}", ty.name, params)
                 }
             }
-            HirTy::PtrTy(ptr_ty) => format!("ptr_{}", ptr_ty.inner.get_valid_c_string()),
+            HirTy::PtrTy(ptr_ty) => {
+                if ptr_ty.is_const {
+                    format!("{}_cstptr", ptr_ty.inner.get_valid_c_string())
+                } else {
+                    format!("{}_mutptr", ptr_ty.inner.get_valid_c_string())
+                }
+            }
             HirTy::Function(func) => {
                 let params = func
                     .params
@@ -307,11 +307,6 @@ impl HirTy<'_> {
                     .join("_");
                 format!("fn_{}_ret_{}", params, func.ret_ty.get_valid_c_string())
             }
-            HirTy::Reference(r) => match r.kind {
-                HirReferenceKind::Mutable => format!("{}_mutrf", r.inner.get_valid_c_string()),
-                HirReferenceKind::ReadOnly => format!("{}_cstrf", r.inner.get_valid_c_string()),
-                HirReferenceKind::Moveable => format!("{}_movrf", r.inner.get_valid_c_string()),
-            },
         }
     }
 }
@@ -343,7 +338,13 @@ impl fmt::Display for HirTy<'_> {
                     write!(f, "{}<{}>", ty.name, params)
                 }
             }
-            HirTy::PtrTy(ptr_ty) => write!(f, "ptr<{}>", ptr_ty.inner),
+            HirTy::PtrTy(ptr_ty) => {
+                if ptr_ty.is_const {
+                    write!(f, "*const {}", ptr_ty.inner)
+                } else {
+                    write!(f, "*{}", ptr_ty.inner)
+                }
+            }
             HirTy::Function(func) => {
                 let params = func
                     .params
@@ -353,43 +354,22 @@ impl fmt::Display for HirTy<'_> {
                     .join(", ");
                 write!(f, "({}) -> {}", params, func.ret_ty)
             }
-            HirTy::Reference(r) => match r.kind {
-                HirReferenceKind::Mutable => write!(f, "&{}", r.inner),
-                HirReferenceKind::ReadOnly => write!(f, "&const {}", r.inner),
-                HirReferenceKind::Moveable => write!(f, "&move {}", r.inner),
-            },
         }
     }
 }
 
+/// A raw pointer type: *T (mutable) or *const T (immutable)
+///
+/// TEMPORARY DESIGN (v0.8.0 MVP): References will be added back in v0.9+
+/// with proper lifetime tracking. Current constructor signatures use pointers:
+///   - Copy constructor: Foo(from: *const Foo)
+///   - Move constructor: Foo(from: *Foo)
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct HirPtrTy<'hir> {
     pub inner: &'hir HirTy<'hir>,
-}
-
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub struct HirReferenceTy<'hir> {
+    /// Whether this is a const pointer (*const T) or mutable pointer (*T)
+    pub is_const: bool,
     pub span: Span,
-    pub inner: &'hir HirTy<'hir>,
-    pub kind: HirReferenceKind,
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
-pub enum HirReferenceKind {
-    Mutable,
-    ReadOnly,
-    Moveable,
-}
-
-impl From<AstReferenceKind> for HirReferenceKind {
-    fn from(value: AstReferenceKind) -> Self {
-        match value {
-            AstReferenceKind::Mutable => HirReferenceKind::Mutable,
-            AstReferenceKind::ReadOnly => HirReferenceKind::ReadOnly,
-            AstReferenceKind::Moveable => HirReferenceKind::Moveable,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]

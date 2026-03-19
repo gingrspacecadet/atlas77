@@ -4,7 +4,7 @@ use crate::atlas_c::atlas_hir::{
         HirFlag, HirGenericConstraint, HirGenericConstraintKind, HirStructMethodModifier,
         HirStructMethodSignature,
     },
-    ty::{HirGenericTy, HirReferenceKind},
+    ty::HirGenericTy,
 };
 
 use super::{
@@ -542,7 +542,11 @@ impl HirPrettyPrinter {
             }
             HirExpr::FieldAccess(field) => {
                 self.print_expr(&field.target);
-                self.write(&format!(".{}", field.field.name));
+                if field.is_arrow {
+                    self.write(&format!("->{}", field.field.name));
+                } else {
+                    self.write(&format!(".{}", field.field.name));
+                }
             }
             HirExpr::Indexing(index) => {
                 self.print_expr(&index.target);
@@ -665,17 +669,6 @@ impl HirPrettyPrinter {
             HirTy::InlineArray(arr) => {
                 format!("[{}; {}]", Self::type_str(arr.inner), arr.size)
             }
-            HirTy::Reference(r) => match r.kind {
-                HirReferenceKind::Mutable => {
-                    format!("{}&", Self::type_str(r.inner))
-                }
-                HirReferenceKind::ReadOnly => {
-                    format!("const {}&", Self::type_str(r.inner))
-                }
-                HirReferenceKind::Moveable => {
-                    format!("{}&&", Self::type_str(r.inner))
-                }
-            },
             HirTy::Generic(g) => format!(
                 "{}<{}>",
                 g.name,
@@ -686,7 +679,11 @@ impl HirPrettyPrinter {
                     .join(", ")
             ),
             HirTy::Uninitialized(_) => "<uninit>".to_string(),
-            HirTy::PtrTy(ptr_ty) => format!("ptr<{}>", Self::type_str(ptr_ty.inner)),
+            HirTy::PtrTy(ptr_ty) => format!(
+                "*{}{}",
+                if ptr_ty.is_const { "const " } else { "" },
+                Self::type_str(ptr_ty.inner)
+            ),
             HirTy::Function(f) => {
                 let params = f
                     .params

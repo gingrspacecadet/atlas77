@@ -1,4 +1,4 @@
-import "std/io";
+extern fun printf<T>(fmt: string, val: T);
 
 #[std::copyable]
 struct Moveable<T> {
@@ -10,13 +10,13 @@ public:
         this.a = a;
         this.b = b;
     }
-    Moveable(dying_obj: &Moveable<T>) {
-        this.a = *dying_obj.a;
-        this.b = *dying_obj.b;
+    Moveable(dying_obj: *Moveable<T>) {
+        this.a = (*dying_obj).a;
+        this.b = (*dying_obj).b;
     }
-    Moveable(from: &const Moveable<T>) {
-        this.a = *from.a;
-        this.b = *from.b;
+    Moveable(from: *const Moveable<T>) {
+        this.a = (*from).a;
+        this.b = (*from).b;
     }
 }
 
@@ -39,34 +39,34 @@ public:
         delete this.b;
     }
     // Copy constructor
-    Copyable(from: &const Copyable<T>) {
-        this.a = *from.a;
-        this.b = *from.b;
+    Copyable(from: *const Copyable<T>) {
+        this.a = (*from).a;
+        this.b = from->b;
     }
 }
 
 
 
-fun move<T: std::moveable>(x: &T) -> T {
-    return T::__mov_ctor(x);
+fun move<T: std::moveable>(x: *T) -> T {
+    return T::__move_ctor(x);
 }
 
-extern memcpy<T>(dest: &T, src: &T, size: int64);
+extern fun memcpy<T>(dest: *T, src: *const T, size: int64);
 //! This needs to become `sizeof(T)` in the C backend... But how to do that?
-extern sizeof<T>() -> int64;
+extern fun sizeof<T>() -> int64;
 
 //! Swaps the values at `a` and `b` using an external C function.
 //! NB: We are using an external C function, because Atlas77 
 //! would create unnecessary copies and destructor invokations.
-private extern __atlas77_c_swap<T>(a: &T, b: &T);
+private extern fun __atlas77_c_swap<T>(a: *T, b: *T);
 
 //! Swaps the values at `a` and `b`.
-public fun swap<T>(a: &T, b: &T) {
+public fun swap<T>(a: *T, b: *T) {
     __atlas77_c_swap<T>(a, b);
 }
 
 //! Replaces `dest` with `src`, returning the previous `dest` value.
-public fun replace<T>(dest: &T, src: T) -> T {
+public fun replace<T>(dest: *T, src: T) -> T {
     let old_value: T = *dest;
     *dest = src;
     return old_value;
@@ -75,22 +75,18 @@ public fun replace<T>(dest: &T, src: T) -> T {
 fun test_swap_and_replace() {
     let x: int64 = 10;
     let y: int64 = 20;
-    let px: &int64 = &x;
-    let py: &int64 = &y;
+    let px: *int64 = &x;
+    let py: *int64 = &y;
     swap<int64>(px, py);
-    print("x: ");
-    println(*px);
-    print("y: ");
-    println(*py);
+    printf<int64>("x: %ld\n", *px);
+    printf<int64>("y: %ld\n", *py);
     let old_x: int64 = replace<int64>(px, 42);
-    print("old x: ");
-    println(old_x);
-    print("new x: ");
-    println(*px);
+    printf<int64>("old x: %ld\n", old_x);
+    printf<int64>("new x: %ld\n", *px);
 }
 
 //! Replaces `dest` with the default value of `T`, returning the previous `dest` value.
-fun take<T: std::default>(x: &T) -> T {
+fun take<T: std::default>(x: *T) -> T {
     let default_value: T = T::default();
 
 }
@@ -107,22 +103,14 @@ fun main() {
     let moveable_str = new Moveable<string>(42, "Hello Moveable");
     let original = new Copyable<Moveable<string>>(42, move<Moveable<string>>(&moveable_str));
     let copy = original;
-    print("Original a: ");
-    print(original.a);
-    print(", b: ");
-    print(original.b);
-    print("Copy a: ");
-    print(copy.a);
-    print(", b: ");
-    println(copy.b);
+    printf<int64>("Original a: %ld", original.a);
+    printf<string>(", b: %s\n", original.b.b);
+    printf<>("Copy a: %ld", copy.a);
+    printf<string>(", b: %c\n", copy.b.b);
     let copy_of_copy = new Copyable<Moveable<string>>(&copy);
-    print("Copy of Copy a: ");
-    print(copy_of_copy.a);
-    print(", b: ");
-    println(copy_of_copy.b);
+    printf<int64>("Copy of Copy a: %ld", copy_of_copy.a);
+    printf<string>(", b: %s\n", copy_of_copy.b.b);
     let moved = move<Moveable<string>>(&original.b);
-    print("Moved b: ");
-    println(moved.b);
-    print("Original after move a: ");
-    print(original.a);
+    printf<string>("Moved b: %s\n", moved.b);
+    printf<int64>("Original after move a: %ld", original.a);
 }

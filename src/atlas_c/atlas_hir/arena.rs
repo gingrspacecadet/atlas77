@@ -10,7 +10,7 @@ use super::ty::{
     HirStringTy, HirTy, HirTyId, HirUninitializedTy, HirUnitTy, HirUnsignedIntTy,
 };
 use crate::atlas_c::{
-    atlas_hir::ty::{HirFunctionTy, HirPtrTy, HirReferenceKind, HirReferenceTy},
+    atlas_hir::ty::{HirFunctionTy, HirPtrTy},
     utils::Span,
 };
 use bumpalo::Bump;
@@ -206,25 +206,20 @@ impl<'arena> TypeArena<'arena> {
         })
     }
 
-    pub fn get_ref_ty(
+    pub fn get_ptr_ty(
         &'arena self,
         inner: &'arena HirTy<'arena>,
-        kind: HirReferenceKind,
+        is_const: bool,
         span: Span,
     ) -> &'arena HirTy<'arena> {
-        let id = HirTyId::compute_ref_ty_id(&HirTyId::from(inner), kind);
+        let id = HirTyId::compute_pointer_ty_id(&HirTyId::from(inner), is_const);
         self.intern.borrow_mut().entry(id).or_insert_with(|| {
-            self.allocator
-                .alloc(HirTy::Reference(HirReferenceTy { inner, kind, span }))
+            self.allocator.alloc(HirTy::PtrTy(HirPtrTy {
+                inner,
+                is_const,
+                span,
+            }))
         })
-    }
-
-    pub fn get_ptr_ty(&'arena self, inner: &'arena HirTy<'arena>) -> &'arena HirTy<'arena> {
-        let id = HirTyId::compute_pointer_ty_id(&HirTyId::from(inner));
-        self.intern
-            .borrow_mut()
-            .entry(id)
-            .or_insert_with(|| self.allocator.alloc(HirTy::PtrTy(HirPtrTy { inner })))
     }
 
     pub fn get_function_ty(

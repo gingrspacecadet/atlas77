@@ -11,7 +11,7 @@ use crate::atlas_c::{
         monomorphization_pass::MonomorphizationPass,
         signature::{ConstantValue, HirStructMethodModifier},
         stmt::HirStatement,
-        ty::{HirGenericTy, HirReferenceKind, HirTy},
+        ty::{HirGenericTy, HirTy},
     },
     atlas_lir::{
         error::{
@@ -231,6 +231,12 @@ impl<'hir> HirLoweringPass<'hir> {
             &struct_body.constructor,
             "new",
         )?);
+        if let Some(move_ctor) = &struct_body.move_constructor {
+            functions.push(self.lower_constructor(struct_body.name, move_ctor, "move_ctor")?);
+        }
+        if let Some(copy_ctor) = &struct_body.copy_constructor {
+            functions.push(self.lower_constructor(struct_body.name, copy_ctor, "copy_ctor")?);
+        }
 
         Ok(lir_struct)
     }
@@ -1113,14 +1119,7 @@ impl<'hir> HirLoweringPass<'hir> {
             HirTy::PtrTy(ptr_ty) => {
                 let inner = self.hir_ty_to_lir_ty(ptr_ty.inner, span);
                 LirTy::Ptr {
-                    is_const: false,
-                    inner: Box::new(inner),
-                }
-            }
-            HirTy::Reference(r) => {
-                let inner = self.hir_ty_to_lir_ty(r.inner, span);
-                LirTy::Ptr {
-                    is_const: r.kind == HirReferenceKind::ReadOnly,
+                    is_const: ptr_ty.is_const,
                     inner: Box::new(inner),
                 }
             }

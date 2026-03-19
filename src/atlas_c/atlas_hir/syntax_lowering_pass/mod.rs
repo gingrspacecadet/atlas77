@@ -53,7 +53,7 @@ use crate::atlas_c::{
             HirVariableStmt, HirWhileStmt,
         },
         syntax_lowering_pass::case::Case,
-        ty::{HirGenericTy, HirNamedTy, HirReferenceKind, HirTy},
+        ty::{HirGenericTy, HirNamedTy, HirTy},
         warning::{
             CannotGenerateACopyConstructorForThisTypeWarning, HirWarning,
             NameShouldBeInDifferentCaseWarning, ThisTypeIsStillUnstableWarning,
@@ -654,6 +654,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                         ty: field.ty,
                     }),
                     ty: field.ty,
+                    is_arrow: true,
                 }),
                 val: HirExpr::Ident(HirIdentExpr {
                     span: field.span,
@@ -1645,6 +1646,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                         ty: self.arena.types().get_uninitialized_ty(),
                     }),
                     ty: self.arena.types().get_uninitialized_ty(),
+                    is_arrow: ast_field_access.is_arrow,
                 });
                 Ok(hir)
             }
@@ -1841,7 +1843,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             AstType::ThisTy(_) => self.arena.types().get_uninitialized_ty(),
             AstType::PtrTy(ptr_ty) => {
                 let inner_ty = self.visit_ty(ptr_ty.inner)?;
-                self.arena.types().get_ptr_ty(inner_ty)
+                self.arena.types().get_ptr_ty(inner_ty, false, ptr_ty.span)
             }
             AstType::Function(func_ty) => {
                 let span = func_ty.span;
@@ -1854,13 +1856,6 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 self.arena
                     .types()
                     .get_function_ty(parameters, return_ty, span)
-            }
-            AstType::Reference(ref_) => {
-                let span = ref_.span;
-                let inner_ty = self.visit_ty(ref_.inner)?;
-                self.arena
-                    .types()
-                    .get_ref_ty(inner_ty, ref_.kind.into(), span)
             }
         };
         Ok(ty)
@@ -1962,6 +1957,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                             ty: field.ty,
                         }),
                         ty: field.ty,
+                        is_arrow: true,
                     })),
                 });
                 statements.push(HirStatement::Expr(HirExprStmt {
@@ -2072,10 +2068,8 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 span,
                 name: self.arena.names().get("from"),
                 name_span: span,
-                ty: self
-                    .arena
-                    .types()
-                    .get_ref_ty(ty, HirReferenceKind::ReadOnly, span),
+                // Copy constructor takes *const Self (const pointer)
+                ty: self.arena.types().get_ptr_ty(ty, true, span), // is_const = true for copy constructor
                 ty_span: span,
             }];
 
@@ -2112,6 +2106,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                             ty: field.ty,
                         }),
                         ty: field.ty,
+                        is_arrow: true,
                     }),
                     val: HirExpr::Unary(UnaryOpExpr {
                         span: field.span,
@@ -2121,9 +2116,9 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                             target: Box::new(HirExpr::Ident(HirIdentExpr {
                                 span,
                                 name: self.arena.names().get("from"),
-                                ty: self.arena.types().get_ref_ty(
-                                    ty,
-                                    HirReferenceKind::ReadOnly,
+                                // Copy constructor takes *const Self
+                                ty: self.arena.types().get_ptr_ty(
+                                    ty, true, // is_const
                                     span,
                                 ),
                             })),
@@ -2133,6 +2128,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                 ty: field.ty,
                             }),
                             ty: field.ty,
+                            is_arrow: true,
                         })),
                         ty: field.ty,
                     }),
@@ -2167,7 +2163,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             | HirTy::UnsignedInteger(_)
             | HirTy::String(_)
             | HirTy::Unit(_)
-            | HirTy::Reference(_)
+            | HirTy::PtrTy(_)
             | HirTy::Function(_) => true,
             // TODO: Add support for list copy constructors
             // HirTy::List(list) => self.can_be_copyable(list.inner, module),

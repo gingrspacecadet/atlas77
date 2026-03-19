@@ -7,7 +7,8 @@ use crate::atlas_c::atlas_hir::error::{
     AccessingPrivateUnionError, CallingConsumingMethodOnMutableReferenceError,
     CallingConsumingMethodOnMutableReferenceOrigin, ListIndexOutOfBoundsError,
     ReferenceToReferenceError, RvalueReferenceToLvalueReferenceError,
-    StdNonCopyableStructCannotHaveCopyConstructorError, StructCannotHaveAFieldOfItsOwnTypeError,
+    StdNonCopyableStructCannotHaveCopyConstructorError,
+    StdNonMoveableStructCannotHaveMoveConstructorError, StructCannotHaveAFieldOfItsOwnTypeError,
     ThisStructDoesNotHaveACopyConstructorError, ThisStructDoesNotHaveAMoveConstructorError,
     TypeIsNotCopyableError, TypeIsNotMoveableError, UnionMustHaveAtLeastTwoVariantError,
     UnionVariantDefinedMultipleTimesError, VariableNameAlreadyDefinedError,
@@ -18,7 +19,7 @@ use crate::atlas_c::atlas_hir::signature::{
     HirFunctionParameterSignature, HirFunctionSignature, HirStructMethodModifier,
     HirStructSignature, HirVisibility,
 };
-use crate::atlas_c::atlas_hir::ty::{HirReferenceKind, HirReferenceTy};
+use crate::atlas_c::atlas_hir::ty::HirPtrTy;
 use crate::atlas_c::atlas_hir::{
     error::{
         AccessingClassFieldOutsideClassError, AccessingPrivateConstructorError,
@@ -27,7 +28,7 @@ use crate::atlas_c::atlas_hir::{
         CallingNonConstMethodOnConstReferenceError, CallingNonConstMethodOnConstReferenceOrigin,
         CanOnlyConstructStructsError, EmptyListLiteralError, FieldKind, HirError, HirResult,
         IllegalOperationError, IllegalUnaryOperationError, MethodConstraintNotSatisfiedError,
-        NotEnoughArgumentsError, NotEnoughArgumentsOrigin, ReturningReferenceToLocalVariableError,
+        NotEnoughArgumentsError, NotEnoughArgumentsOrigin, ReturningPointerToLocalVariableError,
         TryingToAccessFieldOnNonObjectTypeError,
         TryingToCreateAnUnionWithMoreThanOneActiveFieldError,
         TryingToCreateAnUnionWithMoreThanOneActiveFieldOrigin, TryingToIndexNonIndexableTypeError,
@@ -167,10 +168,11 @@ impl<'hir> TypeChecker<'hir> {
             self.context_functions.push(HashMap::new());
             self.check_method(method)?;
         }
-        self.current_func_name = Some("constructor");
+        self.current_func_name = Some("ctor");
         self.check_constructor(&mut class.constructor)?;
-        if let Some(copy_ctor) = &mut class.move_constructor {
-            if class.flag.is_non_moveable() {
+
+        if let Some(copy_ctor) = &mut class.copy_constructor {
+            if class.flag.is_non_copyable() {
                 let path = class.span.path;
                 let src = utils::get_file_content(path).unwrap();
                 return Err(HirError::StdNonCopyableStructCannotHaveCopyConstructor(
@@ -185,7 +187,25 @@ impl<'hir> TypeChecker<'hir> {
             self.current_func_name = Some("copy_ctor");
             self.check_copy_ctor(copy_ctor)?;
         }
-        self.current_func_name = Some("destructor");
+
+        if let Some(move_ctor) = &mut class.move_constructor {
+            if class.flag.is_non_moveable() {
+                let path = class.span.path;
+                let src = utils::get_file_content(path).unwrap();
+                return Err(HirError::StdNonMoveableStructCannotHaveMoveConstructor(
+                    StdNonMoveableStructCannotHaveMoveConstructorError {
+                        struct_name: class.name.to_string(),
+                        copy_ctor_span: move_ctor.signature.span,
+                        flag_span: class.flag.span().unwrap(),
+                        src: NamedSource::new(path, src),
+                    },
+                ));
+            }
+            self.current_func_name = Some("move_ctor");
+            self.check_move_ctor(move_ctor)?;
+        }
+
+        self.current_func_name = Some("dtor");
         self.check_destructor(class.destructor.as_mut().unwrap())?;
         Ok(())
     }
@@ -195,7 +215,7 @@ impl<'hir> TypeChecker<'hir> {
         self.context_functions
             .last_mut()
             .unwrap()
-            .insert(String::from("destructor"), ContextFunction::new());
+            .insert(String::from("dtor"), ContextFunction::new());
         for stmt in &mut destructor.body.statements {
             self.check_stmt(stmt)?;
         }
@@ -225,11 +245,44 @@ impl<'hir> TypeChecker<'hir> {
                         _ty_span: param.ty_span,
                         _is_mut: false,
                         is_param: true,
-                        refs_locals: vec![],
+                        ptrs_to_locals: vec![],
                     },
                 );
         }
         for stmt in &mut copy_ctor.body.statements {
+            self.check_stmt(stmt)?;
+        }
+        //Because it is a copy constructor we don't keep it in the `context_functions`
+        self.context_functions.pop();
+        Ok(())
+    }
+
+    fn check_move_ctor(&mut self, move_ctor: &mut HirStructConstructor<'hir>) -> HirResult<()> {
+        self.context_functions.push(HashMap::new());
+        self.context_functions
+            .last_mut()
+            .unwrap()
+            .insert(String::from("move_ctor"), ContextFunction::new());
+        for param in &move_ctor.params {
+            self.context_functions
+                .last_mut()
+                .unwrap()
+                .get_mut("move_ctor")
+                .unwrap()
+                .insert(
+                    param.name,
+                    ContextVariable {
+                        name: param.name,
+                        name_span: param.span,
+                        ty: param.ty,
+                        _ty_span: param.ty_span,
+                        _is_mut: false,
+                        is_param: true,
+                        ptrs_to_locals: vec![],
+                    },
+                );
+        }
+        for stmt in &mut move_ctor.body.statements {
             self.check_stmt(stmt)?;
         }
         //Because it is a copy constructor we don't keep it in the `context_functions`
@@ -242,12 +295,12 @@ impl<'hir> TypeChecker<'hir> {
         self.context_functions
             .last_mut()
             .unwrap()
-            .insert(String::from("constructor"), ContextFunction::new());
+            .insert(String::from("ctor"), ContextFunction::new());
         for param in &constructor.params {
             self.context_functions
                 .last_mut()
                 .unwrap()
-                .get_mut("constructor")
+                .get_mut("ctor")
                 .unwrap()
                 .insert(
                     param.name,
@@ -258,7 +311,7 @@ impl<'hir> TypeChecker<'hir> {
                         _ty_span: param.ty_span,
                         _is_mut: false,
                         is_param: true,
-                        refs_locals: vec![],
+                        ptrs_to_locals: vec![],
                     },
                 );
         }
@@ -292,7 +345,7 @@ impl<'hir> TypeChecker<'hir> {
                         _ty_span: param.ty_span,
                         _is_mut: false,
                         is_param: true,
-                        refs_locals: vec![],
+                        ptrs_to_locals: vec![],
                     },
                 );
         }
@@ -343,7 +396,7 @@ impl<'hir> TypeChecker<'hir> {
                         _ty_span: param.ty_span,
                         _is_mut: false,
                         is_param: true,
-                        refs_locals: vec![],
+                        ptrs_to_locals: vec![],
                     },
                 );
         }
@@ -364,12 +417,12 @@ impl<'hir> TypeChecker<'hir> {
                 let actual_ret_ty = self.check_expr(&mut ret.value)?;
 
                 // Check for returning a reference to a local variable (directly or through a struct)
-                let local_refs = self.get_local_ref_targets(&ret.value);
+                let local_refs = self.get_local_ptr_targets(&ret.value);
                 if let Some(local_var_name) = local_refs.first() {
                     let path = ret.span.path;
                     let src = utils::get_file_content(path).unwrap();
                     return Err(HirError::ReturningReferenceToLocalVariable(
-                        ReturningReferenceToLocalVariableError {
+                        ReturningPointerToLocalVariableError {
                             span: ret.value.span(),
                             var_name: local_var_name.to_string(),
                             src: NamedSource::new(path, src),
@@ -483,7 +536,7 @@ impl<'hir> TypeChecker<'hir> {
                 };
 
                 // Check if the const is being assigned a reference to a local variable
-                let refs_locals = self.get_local_ref_targets(&c.value);
+                let ptrs_to_locals = self.get_local_ptr_targets(&c.value);
 
                 self.context_functions
                     .last_mut()
@@ -499,7 +552,7 @@ impl<'hir> TypeChecker<'hir> {
                             _ty_span: c.ty_span.unwrap_or(c.name_span),
                             _is_mut: false,
                             is_param: false,
-                            refs_locals,
+                            ptrs_to_locals,
                         },
                     );
 
@@ -527,7 +580,7 @@ impl<'hir> TypeChecker<'hir> {
                 l.ty = var_ty;
 
                 // Check if the let is being assigned a reference to a local variable
-                let refs_locals = self.get_local_ref_targets(&l.value);
+                let ptrs_to_locals = self.get_local_ptr_targets(&l.value);
 
                 self.insert_new_variable(ContextVariable {
                     name: l.name,
@@ -536,7 +589,7 @@ impl<'hir> TypeChecker<'hir> {
                     _ty_span: l.ty_span.unwrap_or(l.name_span),
                     _is_mut: true,
                     is_param: false,
-                    refs_locals,
+                    ptrs_to_locals,
                 })?;
 
                 self.is_equivalent_ty(
@@ -556,9 +609,9 @@ impl<'hir> TypeChecker<'hir> {
                     && let Some(HirUnaryOp::Deref) = &unary_expr.op
                 {
                     let deref_target_ty = self.check_expr(&mut unary_expr.expr.clone())?;
-                    if deref_target_ty.is_const() {
+                    if deref_target_ty.is_const_ptr() {
                         // Allow mutation in constructor for field initialization
-                        if !(self.current_func_name == Some("constructor")
+                        if !(self.current_func_name == Some("ctor")
                             && self.current_class_name.is_some())
                         {
                             return Err(Self::trying_to_mutate_const_reference(
@@ -674,8 +727,8 @@ impl<'hir> TypeChecker<'hir> {
                     }
                 };
                 //early return for constructor, destructor, and copy constructor
-                if function_name == "constructor"
-                    || function_name == "destructor"
+                if function_name == "ctor"
+                    || function_name == "dtor"
                     || function_name == "copy_ctor"
                     || function_name == "move_ctor"
                     || function_name == "default_ctor"
@@ -686,18 +739,18 @@ impl<'hir> TypeChecker<'hir> {
                 let method = class.methods.get(function_name).unwrap();
                 match method.modifier {
                     HirStructMethodModifier::Const => {
-                        let readonly_self_ty = self.arena.types().get_ref_ty(
+                        let readonly_self_ty = self.arena.types().get_ptr_ty(
                             self_ty,
-                            HirReferenceKind::ReadOnly,
+                            true, // is_const = true for const methods
                             method.span,
                         );
                         s.ty = readonly_self_ty;
                         Ok(readonly_self_ty)
                     }
                     HirStructMethodModifier::Mutable => {
-                        let mutable_self_ty = self.arena.types().get_ref_ty(
+                        let mutable_self_ty = self.arena.types().get_ptr_ty(
                             self_ty,
-                            HirReferenceKind::Mutable,
+                            false, // is_const = false for mutable methods
                             method.span,
                         );
                         s.ty = mutable_self_ty;
@@ -740,8 +793,8 @@ impl<'hir> TypeChecker<'hir> {
                         Ok(ty)
                     }
                     Some(HirUnaryOp::AsRef) => {
-                        // Forbid reference nesting: &(&T) is not allowed
-                        if matches!(ty, HirTy::Reference(_)) {
+                        // Forbid pointer nesting for now: &(<*T>) results in **T which is complex
+                        if matches!(ty, HirTy::PtrTy(_)) {
                             let path = u.expr.span().path;
                             let src = utils::get_file_content(path).unwrap();
                             return Err(HirError::ReferenceToReference(
@@ -751,22 +804,15 @@ impl<'hir> TypeChecker<'hir> {
                                 },
                             ));
                         }
-                        // & creates a mutable (exclusive) reference by default
-                        let ref_ty =
-                            self.arena
-                                .types()
-                                .get_ref_ty(ty, HirReferenceKind::Mutable, u.span);
-                        u.ty = ref_ty;
-                        Ok(ref_ty)
+                        // & creates a mutable (exclusive) pointer by default
+                        let ptr_ty = self.arena.types().get_ptr_ty(ty, false, u.span); // is_const = false for &
+                        u.ty = ptr_ty;
+                        Ok(ptr_ty)
                     }
                     Some(HirUnaryOp::Deref) => match ty {
                         HirTy::PtrTy(ptr) => {
                             u.ty = ptr.inner;
                             Ok(ptr.inner)
-                        }
-                        HirTy::Reference(ref_ty) => {
-                            u.ty = ref_ty.inner;
-                            Ok(ref_ty.inner)
                         }
                         _ => Err(Self::illegal_unary_operation_err(
                             ty,
@@ -1167,7 +1213,7 @@ impl<'hir> TypeChecker<'hir> {
                         return Err(HirError::AccessingPrivateConstructor(
                             AccessingPrivateConstructorError {
                                 span: new_obj_expr.span,
-                                kind: String::from("constructor"),
+                                kind: String::from("ctor"),
                                 src: NamedSource::new(path, src),
                             },
                         ));
@@ -1425,7 +1471,7 @@ impl<'hir> TypeChecker<'hir> {
                                 ));
                             }
 
-                            if self.is_readonly_ref_ty(target_ty)
+                            if self.is_const_ptr_ty(target_ty)
                                 && method_signature.modifier != HirStructMethodModifier::Const
                             {
                                 return Err(Self::calling_non_const_method_on_const_reference_err(
@@ -1434,7 +1480,7 @@ impl<'hir> TypeChecker<'hir> {
                                 ));
                             }
 
-                            if self.is_mutable_ref_ty(target_ty)
+                            if self.is_mutable_ptr_ty(target_ty)
                                 && method_signature.modifier == HirStructMethodModifier::Consuming
                             {
                                 // Consuming methods take ownership of `this`, which is not
@@ -1593,7 +1639,7 @@ impl<'hir> TypeChecker<'hir> {
                                     func_expr.ty = ret_ty;
                                     Ok(ret_ty)
                                 }
-                                "copy" | "__cpy_ctor" => {
+                                "copy" | "__copy_ctor" => {
                                     if func_expr.args.len() != 1 {
                                         return Err(Self::not_enough_arguments_err(
                                             "copy constructor".to_string(),
@@ -1635,7 +1681,7 @@ impl<'hir> TypeChecker<'hir> {
                                     func_expr.ty = ret_ty;
                                     Ok(ret_ty)
                                 }
-                                "__mov_ctor" => {
+                                "__move_ctor" => {
                                     if func_expr.args.len() != 1 {
                                         return Err(Self::not_enough_arguments_err(
                                             "move constructor".to_string(),
@@ -1677,7 +1723,7 @@ impl<'hir> TypeChecker<'hir> {
                                     func_expr.ty = ret_ty;
                                     Ok(ret_ty)
                                 }
-                                "default" => {
+                                "default" | "__default_ctor" => {
                                     if func_expr.args.is_empty() {
                                         return Err(Self::not_enough_arguments_err(
                                             "default constructor".to_string(),
@@ -1754,28 +1800,28 @@ impl<'hir> TypeChecker<'hir> {
                                 .find(|v| *v.0 == field_access.field.name);
                             match variant {
                                 Some((_, var)) => {
-                                    // Preserve reference type from target_ty like struct field access does
-                                    if self.is_readonly_ref_ty(target_ty) {
-                                        field_access.ty = self.arena.types().get_ref_ty(
+                                    // Preserve pointer type from target_ty like struct field access does
+                                    if self.is_const_ptr_ty(target_ty) {
+                                        field_access.ty = self.arena.types().get_ptr_ty(
                                             var.ty,
-                                            HirReferenceKind::ReadOnly,
+                                            true, // is_const
                                             field_access.span,
                                         );
-                                        field_access.field.ty = self.arena.types().get_ref_ty(
+                                        field_access.field.ty = self.arena.types().get_ptr_ty(
                                             var.ty,
-                                            HirReferenceKind::ReadOnly,
+                                            true, // is_const
                                             field_access.span,
                                         );
                                         return Ok(field_access.ty);
-                                    } else if self.is_mutable_ref_ty(target_ty) {
-                                        field_access.ty = self.arena.types().get_ref_ty(
+                                    } else if self.is_mutable_ptr_ty(target_ty) {
+                                        field_access.ty = self.arena.types().get_ptr_ty(
                                             var.ty,
-                                            HirReferenceKind::Mutable,
+                                            false, // is_const
                                             field_access.span,
                                         );
-                                        field_access.field.ty = self.arena.types().get_ref_ty(
+                                        field_access.field.ty = self.arena.types().get_ptr_ty(
                                             var.ty,
-                                            HirReferenceKind::Mutable,
+                                            false, // is_const
                                             field_access.span,
                                         );
                                         return Ok(field_access.ty);
@@ -1816,26 +1862,26 @@ impl<'hir> TypeChecker<'hir> {
                             },
                         ));
                     }
-                    if self.is_readonly_ref_ty(target_ty) {
-                        field_access.ty = self.arena.types().get_ref_ty(
+                    if self.is_const_ptr_ty(target_ty) {
+                        field_access.ty = self.arena.types().get_ptr_ty(
                             field_signature.ty,
-                            HirReferenceKind::ReadOnly,
+                            true, // is_const
                             field_access.span,
                         );
-                        field_access.field.ty = self.arena.types().get_ref_ty(
+                        field_access.field.ty = self.arena.types().get_ptr_ty(
                             field_signature.ty,
-                            HirReferenceKind::ReadOnly,
+                            true, // is_const
                             field_access.span,
                         );
-                    } else if self.is_mutable_ref_ty(target_ty) {
-                        field_access.ty = self.arena.types().get_ref_ty(
+                    } else if self.is_mutable_ptr_ty(target_ty) {
+                        field_access.ty = self.arena.types().get_ptr_ty(
                             field_signature.ty,
-                            HirReferenceKind::Mutable,
+                            false, // is_const
                             field_access.span,
                         );
-                        field_access.field.ty = self.arena.types().get_ref_ty(
+                        field_access.field.ty = self.arena.types().get_ptr_ty(
                             field_signature.ty,
-                            HirReferenceKind::Mutable,
+                            false, // is_const
                             field_access.span,
                         );
                     } else {
@@ -1972,9 +2018,9 @@ impl<'hir> TypeChecker<'hir> {
                     return false;
                 }
             };
-            self.arena.types().get_ref_ty(
+            self.arena.types().get_ptr_ty(
                 self.arena.types().get_named_ty(struct_name, new_obj.span),
-                HirReferenceKind::Mutable,
+                false, // is_const = false (mutable pointer)
                 new_obj.span,
             )
         };
@@ -2148,7 +2194,6 @@ impl<'hir> TypeChecker<'hir> {
     fn get_generic_name(ty: &'hir HirTy<'hir>) -> Option<&'hir str> {
         match ty {
             HirTy::Slice(l) => Self::get_generic_name(l.inner),
-            HirTy::Reference(r) => Self::get_generic_name(r.inner),
             HirTy::Named(n) => Some(n.name),
             HirTy::PtrTy(ptr_ty) => Self::get_generic_name(ptr_ty.inner),
             _ => None,
@@ -2170,14 +2215,10 @@ impl<'hir> TypeChecker<'hir> {
                 arr.size,
             ),
             HirTy::Named(_) => actual_generic_ty,
-            HirTy::PtrTy(ptr_ty) => self
-                .arena
-                .types()
-                .get_ptr_ty(self.get_generic_ret_ty(ptr_ty.inner, actual_generic_ty)),
-            HirTy::Reference(r) => self.arena.types().get_ref_ty(
-                self.get_generic_ret_ty(r.inner, actual_generic_ty),
-                r.kind,
-                r.span,
+            HirTy::PtrTy(ptr_ty) => self.arena.types().get_ptr_ty(
+                self.get_generic_ret_ty(ptr_ty.inner, actual_generic_ty),
+                ptr_ty.is_const,
+                ptr_ty.span,
             ),
             _ => actual_generic_ty,
         }
@@ -2185,19 +2226,19 @@ impl<'hir> TypeChecker<'hir> {
 
     /// Return the type of the generic after monormophization
     /// e.g. `foo<T>(a: T) -> T` with `foo(42)` will return `int64`
-    /// e.g. `foo<T>(a: T&&) -> T` with `foo(value)` where value is int64&& will return `int64`
+    /// e.g. `foo<T>(a: *T) -> T` with `foo(&value)` where value is int64 will return `int64`
     fn get_generic_ty(
         ty: &'hir HirTy<'hir>,
         given_ty: &'hir HirTy<'hir>,
     ) -> Option<&'hir HirTy<'hir>> {
         match (ty, given_ty) {
             (HirTy::Slice(l1), HirTy::Slice(l2)) => Self::get_generic_ty(l1.inner, l2.inner),
-            (HirTy::Reference(ref1), HirTy::Reference(ref2)) => {
-                Self::get_generic_ty(ref1.inner, ref2.inner)
+            (HirTy::PtrTy(ptr1), HirTy::PtrTy(ptr2)) => {
+                Self::get_generic_ty(ptr1.inner, ptr2.inner)
             }
             (HirTy::Named(_), _) => Some(given_ty),
-            (HirTy::Reference(r1), _) => Self::get_generic_ty(r1.inner, given_ty),
-            (_, HirTy::Reference(r2)) => Self::get_generic_ty(ty, r2.inner),
+            (HirTy::PtrTy(p1), _) => Self::get_generic_ty(p1.inner, given_ty),
+            (_, HirTy::PtrTy(p2)) => Self::get_generic_ty(ty, p2.inner),
             _ => None,
         }
     }
@@ -2218,28 +2259,15 @@ impl<'hir> TypeChecker<'hir> {
         }
     }
 
-    fn is_readonly_ref_ty(&self, ty: &HirTy<'_>) -> bool {
-        matches!(
-            ty,
-            HirTy::Reference(HirReferenceTy {
-                kind: HirReferenceKind::ReadOnly,
-                ..
-            })
-        )
+    fn is_const_ptr_ty(&self, ty: &HirTy<'_>) -> bool {
+        matches!(ty, HirTy::PtrTy(p) if p.is_const)
     }
 
-    fn is_mutable_ref_ty(&self, ty: &HirTy<'_>) -> bool {
-        matches!(
-            ty,
-            HirTy::Reference(HirReferenceTy {
-                kind: HirReferenceKind::Mutable,
-                ..
-            })
-        )
+    fn is_mutable_ptr_ty(&self, ty: &HirTy<'_>) -> bool {
+        matches!(ty, HirTy::PtrTy(p) if !p.is_const)
     }
 
-    /// Check if two types are equivalent, considering generics and references
-    /// We need a way to handle &primitive and &const primitive being equivalent to primitive
+    /// Check if two types are equivalent, considering generics and pointers
     fn is_equivalent_ty(
         &self,
         expected_ty: &HirTy<'_>,
@@ -2322,27 +2350,13 @@ impl<'hir> TypeChecker<'hir> {
                     ))
                 }
             }
-            (HirTy::Reference(r1), HirTy::Reference(r2)) => {
-                // A T& can become a T&& but not the other way around
-                // A T& can become a const T& but not the other way around
-                // A const T& can become a const T&& but not the other way around
-                //TODO: Improve error messages here to specify which kind of reference mismatch occurred
-                match (&r1.kind, &r2.kind) {
-                    // A T&& cannot become a T&
-                    (HirReferenceKind::Mutable, HirReferenceKind::Moveable) => {
-                        return Err(HirError::RvalueReferenceToLvalueReferenceError(
-                            RvalueReferenceToLvalueReferenceError {
-                                r_val_span: found_span,
-                                l_val_span: expected_span,
-                                src: NamedSource::new(
-                                    expected_span.path,
-                                    utils::get_file_content(expected_span.path).unwrap(),
-                                ),
-                            },
-                        ));
-                    }
-                    // A const T& cannot become a T&
-                    (HirReferenceKind::Mutable, HirReferenceKind::ReadOnly) => {
+            (HirTy::PtrTy(p1), HirTy::PtrTy(p2)) => {
+                // Pointer compatibility rules:
+                // - *T (mutable) can become *const T
+                // - *const T cannot become *T (mutable)
+                match (p1.is_const, p2.is_const) {
+                    // *T expected, *const T found: cannot convert const to mutable
+                    (false, true) => {
                         return Err(Self::type_mismatch_err(
                             &format!("{}", expected_ty),
                             &expected_span,
@@ -2350,34 +2364,17 @@ impl<'hir> TypeChecker<'hir> {
                             &found_span,
                         ));
                     }
-                    // A T&& cannot become a const T&
-                    (HirReferenceKind::ReadOnly, HirReferenceKind::Moveable) => {
-                        return Err(Self::type_mismatch_err(
-                            &format!("{}", expected_ty),
-                            &expected_span,
-                            &format!("{}", found_ty),
-                            &found_span,
-                        ));
-                    }
-                    _ => self.is_equivalent_ty(r1.inner, expected_span, r2.inner, found_span),
+                    // Both same constness, or *const T expected and *T found (mutable to const is OK)
+                    _ => self.is_equivalent_ty(p1.inner, expected_span, p2.inner, found_span),
                 }
             }
-            // If it expects a value type, but found a reference, it should only works if the reference is copyable
-            (expected, HirTy::Reference(r)) => {
-                self.is_equivalent_ty(expected, expected_span, r.inner, found_span)?;
+            // If it expects a value type, but found a pointer, dereference should be explicit
+            (expected, HirTy::PtrTy(p)) => {
+                self.is_equivalent_ty(expected, expected_span, p.inner, found_span)?;
                 // check if found is copyable
                 match expected {
-                    HirTy::Reference(HirReferenceTy {
-                        kind: HirReferenceKind::Mutable,
-                        inner,
-                        ..
-                    })
-                    | HirTy::Reference(HirReferenceTy {
-                        kind: HirReferenceKind::ReadOnly,
-                        inner,
-                        ..
-                    }) => {
-                        if inner.is_copyable(&self.signature) {
+                    HirTy::PtrTy(ptr) => {
+                        if ptr.inner.is_copyable(&self.signature) {
                             return Ok(());
                         }
                     }
@@ -2396,9 +2393,10 @@ impl<'hir> TypeChecker<'hir> {
                     ),
                 }));
             }
-            (HirTy::Reference(r), found) => {
-                self.is_equivalent_ty(r.inner, expected_span, found_ty, found_span)?;
-                if r.kind == HirReferenceKind::Moveable {
+            (HirTy::PtrTy(p), found) => {
+                self.is_equivalent_ty(p.inner, expected_span, found_ty, found_span)?;
+                // Mutable pointer expects moveable type for safety
+                if !p.is_const {
                     // check if found is moveable
                     if found.is_moveable(&self.signature) {
                         return Ok(());
@@ -2455,7 +2453,7 @@ impl<'hir> TypeChecker<'hir> {
                 }
                 None
             }
-            HirTy::Reference(r) => self.get_class_name_of_type(r.inner),
+            HirTy::PtrTy(p) => self.get_class_name_of_type(p.inner),
             _ => None,
         }
     }
@@ -2626,14 +2624,13 @@ impl<'hir> TypeChecker<'hir> {
             HirTy::String(_) => "string".to_string(),
             HirTy::Unit(_) => "unit".to_string(),
             HirTy::Slice(l) => format!("[{}]", Self::get_type_display_name(l.inner)),
-            HirTy::Reference(r) => match r.kind {
-                HirReferenceKind::Mutable => format!("{}&", Self::get_type_display_name(r.inner)),
-                HirReferenceKind::ReadOnly => {
-                    format!("const {}&", Self::get_type_display_name(r.inner))
+            HirTy::PtrTy(p) => {
+                if p.is_const {
+                    format!("*const {}", Self::get_type_display_name(p.inner))
+                } else {
+                    format!("*{}", Self::get_type_display_name(p.inner))
                 }
-                HirReferenceKind::Moveable => format!("{}&&", Self::get_type_display_name(r.inner)),
-            },
-            HirTy::PtrTy(p) => format!("*{}", Self::get_type_display_name(p.inner)),
+            }
             HirTy::InlineArray(arr) => {
                 format!("[{}; {}]", Self::get_type_display_name(arr.inner), arr.size)
             }
@@ -2844,22 +2841,22 @@ impl<'hir> TypeChecker<'hir> {
         eprintln!("{:?}", warning);
     }
 
-    /// Check if the expression is a reference (`&expr`) to a local variable,
-    /// or an identifier that holds a reference to a local variable.
+    /// Check if the expression is a pointer (`&expr`) to a local variable,
+    /// or an identifier that holds a pointer to a local variable.
     /// Returns the name of the local variable if it is, None otherwise.
     ///
-    /// This is used to detect when a function is trying to return a reference
-    /// to a local variable, which would be a dangling reference.
-    /// Get all local variables that the expression references (directly or transitively).
+    /// This is used to detect when a function is trying to return a pointer
+    /// to a local variable, which would be a dangling pointer.
+    /// Get all local variables that the expression points to (directly or transitively).
     /// Returns a list of local variable names if any, empty vec otherwise.
     ///
-    /// This is used to detect when a function is trying to return a reference
-    /// to a local variable, which would be a dangling reference.
-    fn get_local_ref_targets(&self, expr: &HirExpr<'hir>) -> Vec<&'hir str> {
+    /// This is used to detect when a function is trying to return a pointer
+    /// to a local variable, which would be a dangling pointer.
+    fn get_local_ptr_targets(&self, expr: &HirExpr<'hir>) -> Vec<&'hir str> {
         match expr {
             HirExpr::Unary(u) => {
                 if matches!(u.op, Some(HirUnaryOp::AsRef)) {
-                    // Check what we're taking a reference to
+                    // Check what we're taking a pointer to
                     match u.expr.as_ref() {
                         HirExpr::Ident(ident) => {
                             // Check if this is a local variable (not a function parameter)
@@ -2880,35 +2877,35 @@ impl<'hir> TypeChecker<'hir> {
                     vec![]
                 } else if u.op.is_none() {
                     // No op - just unwrap and recurse (parser sometimes wraps in Unary with no op)
-                    self.get_local_ref_targets(u.expr.as_ref())
+                    self.get_local_ptr_targets(u.expr.as_ref())
                 } else {
                     vec![]
                 }
             }
             HirExpr::Ident(ident) => {
-                // Check if this identifier holds references to local variables
-                self.get_refs_locals(ident.name)
+                // Check if this identifier holds pointers to local variables
+                self.get_ptrs_to_locals(ident.name)
             }
             HirExpr::NewObj(new_obj) => {
-                // Check if any constructor argument is a reference to a local
-                let mut refs = vec![];
+                // Check if any constructor argument is a pointer to a local
+                let mut ptrs = vec![];
                 for arg in &new_obj.args {
-                    refs.extend(self.get_local_ref_targets(arg));
+                    ptrs.extend(self.get_local_ptr_targets(arg));
                 }
-                refs
+                ptrs
             }
             _ => vec![],
         }
     }
 
-    /// Get the local variables that a variable references (if any)
-    fn get_refs_locals(&self, name: &str) -> Vec<&'hir str> {
+    /// Get the local variables that a variable points to (if any)
+    fn get_ptrs_to_locals(&self, name: &str) -> Vec<&'hir str> {
         if let Some(context_map) = self.context_functions.last()
             && let Some(func_name) = self.current_func_name
             && let Some(context_func) = context_map.get(func_name)
             && let Some(var) = context_func.get_variable(name)
         {
-            return var.refs_locals.clone();
+            return var.ptrs_to_locals.clone();
         }
         vec![]
     }

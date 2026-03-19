@@ -266,13 +266,14 @@ pub enum AstMethodModifier {
     Static,
     /// Method that takes immutable reference to `this`
     ///
-    /// e.g.: `fun get(&const this) -> T { ... }`
+    /// e.g.: `fun get(*const this) -> T { ... }`
     Const,
     /// Method that takes mutable reference to `this`
     ///
-    /// e.g.: `fun push(&this, val: T) { ... }`
+    /// e.g.: `fun push(*this, val: T) { ... }`
     Mutable,
     /// this&&
+    #[deprecated(note = "References don't exist anymore. They'll be back in the 0.9")]
     Dying,
     /// Method that consumes ownership of `this`
     ///
@@ -611,6 +612,8 @@ pub struct AstFieldAccessExpr<'ast> {
     pub span: Span,
     pub target: &'ast AstExpr<'ast>,
     pub field: &'ast AstIdentifier<'ast>,
+    /* Foo.bar or Foo->bar */
+    pub is_arrow: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -830,7 +833,6 @@ pub enum AstType<'ast> {
     InlineArray(AstInlineArrayType<'ast>),
     Generic(AstGenericType<'ast>),
     PtrTy(AstPtrTy<'ast>),
-    Reference(AstReferenceType<'ast>),
 }
 
 impl AstType<'_> {
@@ -851,12 +853,7 @@ impl AstType<'_> {
             AstType::InlineArray(t) => t.span,
             AstType::Generic(t) => t.span,
             AstType::PtrTy(t) => t.span,
-            AstType::Reference(t) => t.span,
         }
-    }
-
-    pub fn is_ref(&self) -> bool {
-        matches!(self, AstType::Reference(_))
     }
 
     pub fn name(&self) -> String {
@@ -888,11 +885,6 @@ impl AstType<'_> {
             }
             //AstType::Function(_) => "fn".to_owned(),
             AstType::PtrTy(ptr_ty) => format!("ptr<{}>", ptr_ty.inner.name()),
-            AstType::Reference(ref_ty) => match ref_ty.kind {
-                AstReferenceKind::Mutable => format!("&{}", ref_ty.inner.name()),
-                AstReferenceKind::ReadOnly => format!("&const {}", ref_ty.inner.name()),
-                AstReferenceKind::Moveable => format!("&move {}", ref_ty.inner.name()),
-            },
             _ => {
                 panic!("Type does not have a name yet")
             }
@@ -905,6 +897,7 @@ impl AstType<'_> {
 pub struct AstPtrTy<'ast> {
     pub span: Span,
     pub inner: &'ast AstType<'ast>,
+    pub is_const: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -954,25 +947,6 @@ pub struct AstFunctionType<'ast> {
     pub span: Span,
     pub args: &'ast [&'ast AstType<'ast>],
     pub ret: &'ast AstType<'ast>,
-}
-
-#[derive(Debug, Clone)]
-///A reference type in atlas has the form of `&T`, `&const T` or `&move T`
-pub struct AstReferenceType<'ast> {
-    pub span: Span,
-    pub inner: &'ast AstType<'ast>,
-    pub kind: AstReferenceKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AstReferenceKind {
-    /// &T - mutable reference (exclusive borrow)
-    Mutable,
-    /// &const T - read-only reference (shared borrow)
-    ReadOnly,
-    /// &move T - moveable reference (rvalue reference)
-    /// e.g., `fun take_ownership(obj: T&&) { ... }`
-    Moveable,
 }
 
 #[derive(Debug, Clone)]

@@ -15,13 +15,15 @@ use crate::atlas_c::{
 };
 
 pub const HEADER_NAME: &str = "__atlas77_header.h";
-pub const PORTABLE_TIMER_HEADER: &str = include_str!("../../.././libraries/std/useful_header.h");
+pub const PORTABLE_ATLAS77_HEADER: &str = include_str!("../../.././libraries/std/useful_header.h");
 
 pub struct CCodeGen {
     pub c_file: String,
     /// Will contain the prototype declarations for functions.
     /// And all struct definitions
     pub c_header: String,
+    pub struct_names: Vec<String>,
+    pub union_names: Vec<String>,
     indent_level: usize,
 }
 
@@ -30,33 +32,39 @@ impl CCodeGen {
         Self {
             c_file: String::new(),
             c_header: String::new(),
+            struct_names: vec![],
+            union_names: vec![],
             indent_level: 0,
         }
     }
 
     pub fn emit_c(&mut self, program: &LirProgram) -> Result<(), String> {
-        Self::write_to_file(
-            &mut self.c_file,
-            "#include <stdint.h>\n#include <stdbool.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n#include <time.h>\n",
-            self.indent_level,
-        );
-        //Include the generated header
-        Self::write_to_file(
-            &mut self.c_file,
-            &format!("#include \"{}\"\n\n", HEADER_NAME),
-            self.indent_level,
-        );
-        // Include the portable timer header
-        Self::write_to_file(&mut self.c_header, PORTABLE_TIMER_HEADER, self.indent_level);
         for union in program.unions.iter() {
             self.codegen_union(union);
+            for s in self.struct_names.iter() {
+                Self::write_to_top(&mut self.c_header, &format!("typedef union {} {};", s, s));
+            }
         }
         for strukt in program.structs.iter() {
             self.codegen_struct(strukt);
+            for s in self.struct_names.iter() {
+                Self::write_to_top(&mut self.c_header, &format!("typedef struct {} {};", s, s));
+            }
         }
         for func in program.functions.iter() {
             self.codegen_function(func);
         }
+        //Include the generated header
+        Self::write_to_top(
+            &mut self.c_file,
+            &format!("#include \"{}\"\n\n", HEADER_NAME),
+        );
+        // Include the portable atlas77 header
+        Self::write_to_top(&mut self.c_header, PORTABLE_ATLAS77_HEADER);
+        Self::write_to_top(
+            &mut self.c_file,
+            "#include <stdint.h>\n#include <stdbool.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n#include <time.h>\n",
+        );
         Ok(())
     }
 
@@ -67,6 +75,7 @@ impl CCodeGen {
             union_def.push_str(&format!("\t{} {};\n", variant_type_str, variant_name));
         }
         union_def.push_str(&format!("}} {};\n\n", union.name));
+        self.union_names.push(union.name.clone());
         Self::write_to_file(&mut self.c_header, &union_def, self.indent_level);
     }
 
@@ -82,6 +91,7 @@ impl CCodeGen {
             struct_def.push_str(&field_sig);
         }
         struct_def.push_str(&format!("}} {};\n\n", strukt.name));
+        self.struct_names.push(strukt.name.clone());
         Self::write_to_file(&mut self.c_header, &struct_def, self.indent_level);
     }
 
@@ -483,18 +493,11 @@ impl CCodeGen {
                 let line = format!(
                     "{} {} = ({})malloc(sizeof({}));\n\
                     \tif ({} == NULL) {{\n\
-                    \t\tprintf(\"Failed to allocate memory for {}\\n\", {});\n\
+                    \t\tprintf(\"Failed to allocate memory for {}\\n\");\n\
                     \t\texit(1);\n\
                     \t}}\n\
                     \t{};\n",
-                    type_str,
-                    dest_str,
-                    type_str,
-                    type_name_str,
-                    dest_str,
-                    type_str,
-                    dest_str,
-                    ctor_call
+                    type_str, dest_str, type_str, type_name_str, dest_str, type_str, ctor_call
                 );
                 Self::write_to_file(&mut self.c_file, &line, self.indent_level);
             }
@@ -595,7 +598,7 @@ impl CCodeGen {
                 // We assume src is a pointer for now
                 if matches!(field_ty, LirTy::StructType(_)) {
                     if let LirOperand::Deref(_) = **src {
-                        format!("{}.{}", src_str, field_name)
+                        format!("({}).{}", src_str, field_name)
                     } else {
                         format!("{}->{}", src_str, field_name)
                     }
@@ -618,5 +621,10 @@ impl CCodeGen {
         }
         file.push_str(content);
         file.push('\n');
+    }
+
+    fn write_to_top(file: &mut String, content: &str) {
+        let entry = format!("{}\n", content);
+        file.insert_str(0, &entry);
     }
 }

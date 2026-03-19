@@ -174,6 +174,8 @@ pub struct HirFieldAccessExpr<'hir> {
     pub target: Box<HirExpr<'hir>>,
     pub field: Box<HirIdentExpr<'hir>>,
     pub ty: &'hir HirTy<'hir>,
+    /// foo.bar or foo->bar
+    pub is_arrow: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -396,7 +398,6 @@ pub struct HirIdentExpr<'hir> {
 /// The source variable remains valid after this operation.
 ///
 /// For primitive types, this is a bitwise copy.
-/// For structs with a `_copy` method, this calls the copy constructor.
 #[derive(Debug, Clone)]
 pub struct HirCopyExpr<'hir> {
     pub span: Span,
