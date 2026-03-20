@@ -188,6 +188,11 @@ impl HirTy<'_> {
     pub fn is_unit(&self) -> bool {
         matches!(self, HirTy::Unit(_))
     }
+
+    pub fn is_array(&self) -> bool {
+        matches!(self, HirTy::InlineArray(_))
+    }
+
     pub fn is_primitive(&self) -> bool {
         matches!(
             self,

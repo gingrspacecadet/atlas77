@@ -591,6 +591,7 @@ pub struct AstNewObjExpr<'ast> {
     pub span: Span,
     pub ty: &'ast AstType<'ast>,
     pub args: &'ast [&'ast AstExpr<'ast>],
+    pub is_heap_allocation: bool,
 }
 
 #[derive(Debug, Clone)]

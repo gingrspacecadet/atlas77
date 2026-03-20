@@ -12,6 +12,7 @@ use crate::atlas_c::atlas_hir::error::{
     TypeIsNotCopyableError, TypeIsNotMoveableError, UnionMustHaveAtLeastTwoVariantError,
     UnionVariantDefinedMultipleTimesError, VariableNameAlreadyDefinedError,
 };
+use crate::atlas_c::atlas_hir::expr::HirStaticAccessExpr;
 use crate::atlas_c::atlas_hir::item::{HirStructConstructor, HirUnion};
 use crate::atlas_c::atlas_hir::pretty_print::HirPrettyPrinter;
 use crate::atlas_c::atlas_hir::signature::{
@@ -35,7 +36,7 @@ use crate::atlas_c::atlas_hir::{
         UnknownIdentifierError, UnknownMethodError, UnknownTypeError, UnsupportedExpr,
     },
     expr::{
-        HirBinaryOperator, HirExpr, HirIdentExpr, HirNewObjExpr, HirUnaryOp,
+        HirBinaryOperator, HirExpr, HirFunctionKind, HirIdentExpr, HirNewObjExpr, HirUnaryOp,
         HirUnsignedIntegerLiteralExpr,
     },
     item::{HirStruct, HirStructMethod},
@@ -1257,10 +1258,15 @@ impl<'hir> TypeChecker<'hir> {
                         ));
                     }
                 }
-                new_obj_expr.ty = self
+                let value_ty = self
                     .arena
                     .types()
                     .get_named_ty(struct_ty.name, struct_ty.span);
+                new_obj_expr.ty = self.arena.intern(HirTy::PtrTy(HirPtrTy {
+                    inner: value_ty,
+                    is_const: false,
+                    span: new_obj_expr.span,
+                }));
                 Ok(new_obj_expr.ty)
             }
             HirExpr::Call(func_expr) => {
@@ -1270,7 +1276,83 @@ impl<'hir> TypeChecker<'hir> {
                 match callee {
                     HirExpr::Ident(i) => {
                         // First check if the function is external by looking up the base name
-                        let base_func = self.signature.functions.get(i.name);
+                        let base_func = self.signature.functions.get(i.name).copied();
+
+                        // Constructor-call sugar: `Type(args...)`.
+                        // If there is no matching function symbol, reinterpret it as a struct constructor call.
+                        if base_func.is_none() {
+                            let ctor_ty = if func_expr.generics.is_empty() {
+                                let named = self.arena.types().get_named_ty(i.name, i.span);
+                                if !self.signature.structs.contains_key(i.name) {
+                                    None
+                                } else {
+                                    Some(named)
+                                }
+                            } else {
+                                let generic_ty = self.arena.intern(HirTy::Generic(HirGenericTy {
+                                    name: i.name,
+                                    inner: func_expr
+                                        .generics
+                                        .iter()
+                                        .map(|g| (*g).clone())
+                                        .collect(),
+                                    span: i.span,
+                                }));
+                                let mangled_name = MonomorphizationPass::generate_mangled_name(
+                                    self.arena,
+                                    match generic_ty {
+                                        HirTy::Generic(g) => g,
+                                        _ => unreachable!(),
+                                    },
+                                    "struct",
+                                );
+
+                                if self.signature.structs.contains_key(mangled_name) {
+                                    Some(generic_ty as &_)
+                                } else {
+                                    None
+                                }
+                            };
+
+                            if let Some(ctor_ty) = ctor_ty {
+                                let ctor_target_ty = ctor_ty;
+                                let ctor_args = std::mem::take(&mut func_expr.args);
+                                let mut synthetic_ctor = HirExpr::NewObj(HirNewObjExpr {
+                                    span: func_expr.span,
+                                    ty: ctor_ty,
+                                    args: ctor_args,
+                                    args_ty: Vec::new(),
+                                    is_copy_constructor_call: false,
+                                });
+
+                                let checked_ty = self.check_expr(&mut synthetic_ctor)?;
+
+                                if let HirExpr::NewObj(checked_ctor) = synthetic_ctor {
+                                    func_expr.args = checked_ctor.args;
+                                    // Normal constructor call syntax returns a value (stack-like semantics).
+                                    // `new (...)` is represented by `HirExpr::NewObj` and remains pointer-typed.
+                                    let ctor_result_ty = ctor_target_ty;
+                                    func_expr.ty = ctor_result_ty;
+
+                                    func_expr.callee =
+                                        Box::new(HirExpr::StaticAccess(HirStaticAccessExpr {
+                                            span: func_expr.callee_span,
+                                            target: ctor_target_ty,
+                                            field: Box::new(HirIdentExpr {
+                                                name: "__ctor",
+                                                span: func_expr.callee_span,
+                                                ty: self.arena.types().get_uninitialized_ty(),
+                                            }),
+                                            ty: ctor_result_ty,
+                                        }));
+                                    func_expr.kind = HirFunctionKind::Constructor;
+
+                                    let _ = checked_ty;
+                                    return Ok(ctor_result_ty);
+                                }
+                            }
+                        }
+
                         let (is_external, is_intrinsic) = base_func
                             .map(|f| (f.is_external, f.is_intrinsic))
                             .unwrap_or((false, false));
@@ -1996,13 +2078,15 @@ impl<'hir> TypeChecker<'hir> {
                         "Add error when the intrinsic is not declared (shouldn't happen though)"
                     ),
                 };
-                self.check_extern_fn(
+                let ty = self.check_extern_fn(
                     intrinsic.name,
                     &mut intrinsic.args_ty,
                     &mut intrinsic.args,
                     intrinsic.span,
                     signature,
-                )
+                )?;
+                intrinsic.ty = ty;
+                Ok(ty)
             }
         }
     }

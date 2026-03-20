@@ -1692,7 +1692,7 @@ impl<'ast> Parser<'ast> {
     }
 
     fn parse_new_obj(&mut self) -> ParseResult<AstExpr<'ast>> {
-        self.expect(TokenKind::KwNew)?;
+        let start = self.expect(TokenKind::KwNew)?;
         let current = self.current();
         match current.kind() {
             TokenKind::Identifier(_) => {
@@ -1713,6 +1713,80 @@ impl<'ast> Parser<'ast> {
                     span: Span::union_span(&ty.span(), &self.current().span()),
                     ty: self.arena.alloc(ty),
                     args: self.arena.alloc_vec(args),
+                    is_heap_allocation: false,
+                });
+
+                Ok(node)
+            }
+            TokenKind::LParen => {
+                self.expect(TokenKind::LParen)?;
+                let mut ctor_expr = self.parse_expr()?;
+                self.expect(TokenKind::RParen)?;
+
+                while let AstExpr::UnaryOp(unary) = &ctor_expr {
+                    if unary.op.is_none() {
+                        ctor_expr = (*unary.expr).clone();
+                    } else {
+                        break;
+                    }
+                }
+
+                let (ty, args) = match ctor_expr {
+                    AstExpr::Call(call) => {
+                        let mut callee_expr = call.callee.clone();
+                        while let AstExpr::UnaryOp(unary) = callee_expr {
+                            if unary.op.is_none() {
+                                callee_expr = (*unary.expr).clone();
+                            } else {
+                                callee_expr = AstExpr::UnaryOp(unary);
+                                break;
+                            }
+                        }
+
+                        let ty = match callee_expr {
+                            AstExpr::Identifier(ident) => {
+                                if call.generics.is_empty() {
+                                    AstType::Named(AstNamedType {
+                                        span: ident.span,
+                                        name: self.arena.alloc(ident),
+                                    })
+                                } else {
+                                    let generic_inner = call
+                                        .generics
+                                        .iter()
+                                        .map(|g| (**g).clone())
+                                        .collect::<Vec<_>>();
+                                    AstType::Generic(AstGenericType {
+                                        span: ident.span,
+                                        name: self.arena.alloc(ident),
+                                        inner_types: self.arena.alloc(generic_inner),
+                                    })
+                                }
+                            }
+                            _ => {
+                                return Err(self.unexpected_token_error(
+                                    TokenVec(vec![TokenKind::Identifier(
+                                        "Constructor call".to_string(),
+                                    )]),
+                                    &call.span,
+                                ));
+                            }
+                        };
+                        (ty, call.args)
+                    }
+                    other => {
+                        return Err(self.unexpected_token_error(
+                            TokenVec(vec![TokenKind::Identifier("Constructor call".to_string())]),
+                            &other.span(),
+                        ));
+                    }
+                };
+
+                let node = AstExpr::NewObj(AstNewObjExpr {
+                    span: Span::union_span(&start.span(), &self.current().span()),
+                    ty: self.arena.alloc(ty),
+                    args,
+                    is_heap_allocation: true,
                 });
 
                 Ok(node)
@@ -1770,6 +1844,7 @@ impl<'ast> Parser<'ast> {
             _ => Err(self.unexpected_token_error(
                 TokenVec(vec![
                     TokenKind::Identifier("Identifier".to_string()),
+                    TokenKind::LParen,
                     TokenKind::LBrace,
                 ]),
                 &current.span,

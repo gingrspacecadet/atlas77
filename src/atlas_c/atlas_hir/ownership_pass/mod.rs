@@ -37,6 +37,7 @@ enum MoveReason {
     ExplicitMoveCall,
     MoveConstructorCall,
     MutablePointerParameter,
+    ReturnedValueTransfer,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,9 @@ enum VarState<'hir> {
     },
     ConditionallyMoved {
         move_span: Span,
+    },
+    Returned {
+        return_span: Span,
     },
 }
 
@@ -77,6 +81,7 @@ pub struct OwnershipPass<'hir> {
     scopes: Vec<ScopeState<'hir>>,
     warnings: Vec<ErrReport>,
     emitted_ctor_warning: bool,
+    return_context_depth: usize,
 }
 
 impl<'hir> OwnershipPass<'hir> {
@@ -87,6 +92,7 @@ impl<'hir> OwnershipPass<'hir> {
             scopes: Vec::new(),
             warnings: Vec::new(),
             emitted_ctor_warning: false,
+            return_context_depth: 0,
         }
     }
 
@@ -189,6 +195,16 @@ impl<'hir> OwnershipPass<'hir> {
         if let Some(var) = self.get_var_mut(name) {
             var.state = VarState::Deleted { delete_span: span };
         }
+    }
+
+    fn mark_returned(&mut self, name: &'hir str, span: Span) {
+        if let Some(var) = self.get_var_mut(name) {
+            var.state = VarState::Returned { return_span: span };
+        }
+    }
+
+    fn in_return_context(&self) -> bool {
+        self.return_context_depth > 0
     }
 
     fn is_trivial(&self, ty: &HirTy<'hir>) -> bool {
@@ -367,8 +383,10 @@ impl<'hir> OwnershipPass<'hir> {
                 self.analyze_expr(&mut expr_stmt.expr)?;
             }
             HirStatement::Return(ret_stmt) => {
+                self.return_context_depth += 1;
                 self.analyze_expr(&mut ret_stmt.value)?;
-                self.copy_by_default(&mut ret_stmt.value, ret_stmt.ty, ret_stmt.span)?;
+                self.return_context_depth = self.return_context_depth.saturating_sub(1);
+                self.mark_return_expression_transfer(&ret_stmt.value, ret_stmt.span);
             }
             HirStatement::IfElse(if_stmt) => {
                 self.analyze_expr(&mut if_stmt.condition)?;
@@ -528,6 +546,15 @@ impl<'hir> OwnershipPass<'hir> {
                         },
                     ));
                 }
+                VarState::Returned { return_span } => {
+                    let warning = self.use_after_move_warning(
+                        ident.name,
+                        ident.span,
+                        *return_span,
+                        &MoveReason::ReturnedValueTransfer,
+                    );
+                    self.warnings.push(warning);
+                }
                 VarState::Valid => {}
             }
         }
@@ -569,23 +596,32 @@ impl<'hir> OwnershipPass<'hir> {
         for idx in 0..call.args.len() {
             let param_ty = call.args_ty.get(idx).copied();
             let is_mut_ptr_param = matches!(param_ty, Some(HirTy::PtrTy(p)) if !p.is_const);
+            let is_by_value_param = matches!(param_ty, Some(ty) if !matches!(ty, HirTy::PtrTy(_)));
 
-            let should_move = move_reason.is_some() || is_mut_ptr_param;
+            let should_move = move_reason.is_some()
+                || is_mut_ptr_param
+                || (self.in_return_context() && is_by_value_param);
 
             if should_move {
                 self.ensure_not_moving_from_const_ptr(&call.args[idx])?;
+
+                let reason = if let Some(reason) = move_reason.clone() {
+                    reason
+                } else if is_mut_ptr_param {
+                    MoveReason::MutablePointerParameter
+                } else {
+                    MoveReason::ReturnedValueTransfer
+                };
 
                 if let Some((var_name, field_name)) = self.extract_move_target(&call.args[idx]) {
                     if let Some(field) = field_name {
                         self.mark_field_moved(var_name, field, call.args[idx].span());
                     } else {
-                        self.mark_moved(
-                            var_name,
-                            call.args[idx].span(),
-                            move_reason
-                                .clone()
-                                .unwrap_or(MoveReason::MutablePointerParameter),
-                        );
+                        if matches!(reason, MoveReason::ReturnedValueTransfer) {
+                            self.mark_returned(var_name, call.args[idx].span());
+                        } else {
+                            self.mark_moved(var_name, call.args[idx].span(), reason);
+                        }
                     }
                 }
                 continue;
@@ -670,6 +706,10 @@ impl<'hir> OwnershipPass<'hir> {
             return Ok(());
         }
 
+        if !self.should_wrap_copy_expr(expr) {
+            return Ok(());
+        }
+
         if !self.is_copyable(source_ty) {
             let path = span.path;
             let src = utils::get_file_content(path).unwrap();
@@ -678,10 +718,6 @@ impl<'hir> OwnershipPass<'hir> {
                 type_name: format!("{}", source_ty),
                 src: NamedSource::new(path, src),
             }));
-        }
-
-        if !self.should_wrap_copy_expr(expr) {
-            return Ok(());
         }
 
         let source_name = self.extract_copy_source_name(expr).unwrap_or("<tmp>");
@@ -697,6 +733,7 @@ impl<'hir> OwnershipPass<'hir> {
     }
 
     fn should_wrap_copy_expr(&self, expr: &HirExpr<'hir>) -> bool {
+        let expr = self.strip_noop_unary(expr);
         matches!(
             expr,
             HirExpr::Ident(_)
@@ -708,6 +745,7 @@ impl<'hir> OwnershipPass<'hir> {
     }
 
     fn extract_copy_source_name(&self, expr: &HirExpr<'hir>) -> Option<&'hir str> {
+        let expr = self.strip_noop_unary(expr);
         match expr {
             HirExpr::Ident(ident) => Some(ident.name),
             HirExpr::FieldAccess(field) => {
@@ -723,7 +761,37 @@ impl<'hir> OwnershipPass<'hir> {
     }
 
     fn is_explicit_move_expr(&self, expr: &HirExpr<'hir>) -> bool {
+        let expr = self.strip_noop_unary(expr);
         matches!(expr, HirExpr::Call(call) if self.is_std_move_call(call) || self.is_move_constructor_call(call))
+    }
+
+    fn strip_noop_unary<'a>(&self, mut expr: &'a HirExpr<'hir>) -> &'a HirExpr<'hir> {
+        while let HirExpr::Unary(unary) = expr {
+            if unary.op.is_none() {
+                expr = &unary.expr;
+            } else {
+                break;
+            }
+        }
+        expr
+    }
+
+    fn mark_return_expression_transfer(&mut self, expr: &HirExpr<'hir>, span: Span) {
+        let expr = self.strip_noop_unary(expr);
+
+        if matches!(expr, HirExpr::Copy(_)) {
+            return;
+        }
+
+        match expr {
+            HirExpr::Ident(ident) => self.mark_returned(ident.name, span),
+            HirExpr::FieldAccess(field_access) => {
+                if let HirExpr::Ident(base) = self.strip_noop_unary(&field_access.target) {
+                    self.mark_field_moved(base.name, field_access.field.name, span);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn build_scope_auto_deletes(&mut self, span: Span) -> Vec<HirStatement<'hir>> {
@@ -738,7 +806,10 @@ impl<'hir> OwnershipPass<'hir> {
                 if !self.should_auto_delete_type(var.ty) {
                     continue;
                 }
-                if matches!(var.state, VarState::Deleted { .. }) {
+                if matches!(
+                    var.state,
+                    VarState::Deleted { .. } | VarState::Returned { .. }
+                ) {
                     continue;
                 }
                 names_to_delete.push(var.name);
@@ -785,6 +856,11 @@ impl<'hir> OwnershipPass<'hir> {
                 };
 
                 let merged = match (&then_var.state, &else_var.state) {
+                    (VarState::Returned { return_span }, VarState::Returned { .. }) => {
+                        VarState::Returned {
+                            return_span: *return_span,
+                        }
+                    }
                     (VarState::Moved { move_span, reason }, VarState::Moved { .. }) => {
                         VarState::Moved {
                             move_span: *move_span,
@@ -797,7 +873,19 @@ impl<'hir> OwnershipPass<'hir> {
                         }
                     }
                     (VarState::Moved { move_span, .. }, _)
-                    | (_, VarState::Moved { move_span, .. }) => VarState::ConditionallyMoved {
+                    | (_, VarState::Moved { move_span, .. })
+                    | (
+                        VarState::Returned {
+                            return_span: move_span,
+                        },
+                        _,
+                    )
+                    | (
+                        _,
+                        VarState::Returned {
+                            return_span: move_span,
+                        },
+                    ) => VarState::ConditionallyMoved {
                         move_span: *move_span,
                     },
                     _ => VarState::Valid,
@@ -824,7 +912,10 @@ impl<'hir> OwnershipPass<'hir> {
                 };
 
                 if matches!(before_var.state, VarState::Valid)
-                    && let VarState::Moved { move_span, .. } = after_var.state
+                    && let VarState::Moved { move_span, .. }
+                    | VarState::Returned {
+                        return_span: move_span,
+                    } = after_var.state
                     && let Some(current) = self.scopes[idx].vars.get_mut(name)
                 {
                     current.state = VarState::ConditionallyMoved { move_span };
@@ -844,6 +935,7 @@ impl<'hir> OwnershipPass<'hir> {
             MoveReason::ExplicitMoveCall => "explicit move call",
             MoveReason::MoveConstructorCall => "move constructor call",
             MoveReason::MutablePointerParameter => "mutable pointer parameter",
+            MoveReason::ReturnedValueTransfer => "returned value transfer",
         };
 
         let path = access_span.path;

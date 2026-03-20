@@ -332,8 +332,8 @@ pub enum LirInstr {
         func_name: String,
         args: Vec<LirOperand>,
     },
-    /// Allocate a new value of the given type
-    /// And then call the constructor on it
+    /// Construct a value of the given type in local storage,
+    /// then call the constructor on it.
     Construct {
         ty: LirTy,
         dst: LirOperand,
@@ -345,6 +345,11 @@ pub enum LirInstr {
         /// __default_ctor
         ctor_kind: String,
     },
+    HeapAllocCopy {
+        ty: LirTy,
+        dst: LirOperand,
+        src: LirOperand,
+    },
     ConstructArray {
         ty: LirTy,
         dst: LirOperand,
@@ -355,10 +360,14 @@ pub enum LirInstr {
         dst: LirOperand,
         field_values: HashMap<String, LirOperand>,
     },
-    /// Free a value of the given type
+    /// Delete semantics for a value of the given type.
+    ///
+    /// - `should_free = true`: delete pointer-like storage (may also run destructor)
+    /// - `should_free = false`: run value destruction only (no heap free)
     Delete {
         ty: LirTy,
         src: LirOperand,
+        should_free: bool,
     },
     FieldAccess {
         ty: LirTy,
@@ -367,6 +376,11 @@ pub enum LirInstr {
         field_name: String,
     },
     Assign {
+        ty: LirTy,
+        dst: LirOperand,
+        src: LirOperand,
+    },
+    AggregateCopy {
         ty: LirTy,
         dst: LirOperand,
         src: LirOperand,

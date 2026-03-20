@@ -237,6 +237,9 @@ impl<'hir> HirLoweringPass<'hir> {
         if let Some(copy_ctor) = &struct_body.copy_constructor {
             functions.push(self.lower_constructor(struct_body.name, copy_ctor, "__copy_ctor")?);
         }
+        if let Some(destructor) = &struct_body.destructor {
+            functions.push(self.lower_constructor(struct_body.name, destructor, "__dtor")?);
+        }
 
         Ok(lir_struct)
     }
@@ -796,13 +799,33 @@ impl<'hir> HirLoweringPass<'hir> {
                     args.push(self.lower_expr(arg)?);
                 }
 
-                let dest = self.new_temp();
+                let new_expr_ty = self.hir_ty_to_lir_ty(new_obj.ty, new_obj.span);
+                let pointee_ty = match new_expr_ty {
+                    LirTy::Ptr { inner, .. } => (*inner).clone(),
+                    _ => {
+                        return Err(unsupported_expr(
+                            new_obj.span,
+                            format!(
+                                "Expected pointer type for new-expression, found {:?}",
+                                new_expr_ty
+                            ),
+                        ));
+                    }
+                };
 
+                let stack_value = self.new_temp();
                 self.emit(LirInstr::Construct {
-                    ty: self.hir_ty_to_lir_ty(new_obj.ty, new_obj.span),
-                    dst: dest.clone(),
+                    ty: pointee_ty.clone(),
+                    dst: stack_value.clone(),
                     args,
                     ctor_kind: String::from("__ctor"),
+                })?;
+
+                let dest = self.new_temp();
+                self.emit(LirInstr::HeapAllocCopy {
+                    ty: pointee_ty,
+                    dst: dest.clone(),
+                    src: stack_value,
                 })?;
                 Ok(dest)
             }
@@ -946,8 +969,20 @@ impl<'hir> HirLoweringPass<'hir> {
                         let target_operand = self.lower_expr(&field_access.target)?;
                         args.push(target_operand);
                     } else if let HirExpr::StaticAccess(static_access) = call.callee.as_ref() {
-                        for arg in &call.args {
-                            args.push(self.lower_expr(arg)?);
+                        for (idx, arg) in call.args.iter().enumerate() {
+                            let lowered = self.lower_expr(arg)?;
+                            let adjusted = if let Some(expected_ty) = call.args_ty.get(idx) {
+                                if matches!(expected_ty, HirTy::PtrTy(_))
+                                    && !matches!(arg.ty(), HirTy::PtrTy(_))
+                                {
+                                    LirOperand::AsRef(Box::new(lowered))
+                                } else {
+                                    lowered
+                                }
+                            } else {
+                                lowered
+                            };
+                            args.push(adjusted);
                         }
                         match static_access.field.name {
                             "__ctor" | "__copy_ctor" | "__move_ctor" | "__default_ctor" => {
@@ -988,8 +1023,20 @@ impl<'hir> HirLoweringPass<'hir> {
                         ));
                     }
                 }
-                for arg in &call.args {
-                    args.push(self.lower_expr(arg)?);
+                for (idx, arg) in call.args.iter().enumerate() {
+                    let lowered = self.lower_expr(arg)?;
+                    let adjusted = if let Some(expected_ty) = call.args_ty.get(idx) {
+                        if matches!(expected_ty, HirTy::PtrTy(_))
+                            && !matches!(arg.ty(), HirTy::PtrTy(_))
+                        {
+                            LirOperand::AsRef(Box::new(lowered))
+                        } else {
+                            lowered
+                        }
+                    } else {
+                        lowered
+                    };
+                    args.push(adjusted);
                 }
 
                 // Check if it's an external function
@@ -1063,8 +1110,41 @@ impl<'hir> HirLoweringPass<'hir> {
                     // For primitives, copy is just a value use
                     // For objects, this would call the copy constructor
                     self.lower_expr(&copy_expr.expr)
+                } else if copy_expr.ty.is_array() {
+                    let src = self.lower_expr(&copy_expr.expr)?;
+                    let ty = self.hir_ty_to_lir_ty(copy_expr.ty, copy_expr.span);
+                    let size = match ty {
+                        LirTy::ArrayTy { size, .. } => size,
+                        _ => {
+                            return Err(unsupported_expr(
+                                copy_expr.span,
+                                format!(
+                                    "Expected inline array type for copy expression, got {:?}",
+                                    ty
+                                ),
+                            ));
+                        }
+                    };
+
+                    let dest = self.new_temp();
+                    self.emit(LirInstr::ConstructArray {
+                        ty: ty.clone(),
+                        dst: dest.clone(),
+                        size,
+                    })?;
+                    self.emit(LirInstr::AggregateCopy {
+                        ty,
+                        dst: dest.clone(),
+                        src,
+                    })?;
+                    Ok(dest)
                 } else {
-                    let arg = self.lower_expr(&*copy_expr.expr)?;
+                    let lowered_arg = self.lower_expr(&*copy_expr.expr)?;
+                    let arg = if matches!(copy_expr.expr.ty(), HirTy::PtrTy(_)) {
+                        lowered_arg
+                    } else {
+                        LirOperand::AsRef(Box::new(lowered_arg))
+                    };
                     let dest = self.new_temp();
                     self.emit(LirInstr::Construct {
                         ty: self.hir_ty_to_lir_ty(copy_expr.ty, copy_expr.span),
@@ -1080,7 +1160,12 @@ impl<'hir> HirLoweringPass<'hir> {
                 let dst = self.new_temp(); // Placeholder
                 let src = self.lower_expr(&delete_expr.expr)?;
                 let ty = self.hir_ty_to_lir_ty(delete_expr.expr.ty(), delete_expr.span);
-                self.emit(LirInstr::Delete { ty, src })?;
+                let should_free = matches!(delete_expr.expr.ty(), HirTy::PtrTy(_));
+                self.emit(LirInstr::Delete {
+                    ty,
+                    src,
+                    should_free,
+                })?;
                 Ok(dst)
             }
 
@@ -1110,24 +1195,24 @@ impl<'hir> HirLoweringPass<'hir> {
                     Ok(dest)
                 }
                 _ => {
-                let mut args = Vec::new();
-                for arg in &intrinsic.args {
-                    args.push(self.lower_expr(arg)?);
+                    let mut args = Vec::new();
+                    for arg in &intrinsic.args {
+                        args.push(self.lower_expr(arg)?);
+                    }
+                    let dest = if matches!(intrinsic.ty, HirTy::Unit(_)) {
+                        None
+                    } else {
+                        Some(self.new_temp())
+                    };
+                    self.emit(LirInstr::Call {
+                        ty: self.hir_ty_to_lir_ty(intrinsic.ty, intrinsic.span),
+                        dst: dest.clone(),
+                        func_name: intrinsic.name.to_string(),
+                        args,
+                    })?;
+                    Ok(dest.unwrap_or(LirOperand::ImmInt(0)))
                 }
-                let dest = if matches!(intrinsic.ty, HirTy::Unit(_)) {
-                    None
-                } else {
-                    Some(self.new_temp())
-                };
-                self.emit(LirInstr::Call {
-                    ty: self.hir_ty_to_lir_ty(intrinsic.ty, intrinsic.span),
-                    dst: dest.clone(),
-                    func_name: intrinsic.name.to_string(),
-                    args,
-                })?;
-                Ok(dest.unwrap_or(LirOperand::ImmInt(0)))
-            }
-},
+            },
             _ => Err(unsupported_expr(expr.span(), format!("{:?}", expr))),
         }
     }
@@ -1218,6 +1303,89 @@ impl<'hir> HirLoweringPass<'hir> {
                 eprintln!("{:?}", report);
                 std::process::exit(1);
             } // Default fallback
+        }
+    }
+
+    fn lir_type_size_and_align(&self, ty: &LirTy) -> (usize, usize) {
+        self.lir_type_size_and_align_impl(ty, &mut HashSet::new())
+    }
+
+    fn lir_type_size_and_align_impl(
+        &self,
+        ty: &LirTy,
+        visiting: &mut HashSet<String>,
+    ) -> (usize, usize) {
+        match ty {
+            LirTy::Int8 | LirTy::UInt8 | LirTy::Boolean => (1, 1),
+            LirTy::Int16 | LirTy::UInt16 => (2, 2),
+            LirTy::Int32 | LirTy::UInt32 | LirTy::Float32 => (4, 4),
+            LirTy::Int64 | LirTy::UInt64 | LirTy::Float64 => (8, 8),
+            LirTy::Char => (4, 4),
+            LirTy::Str | LirTy::Ptr { .. } | LirTy::Unit => (8, 8),
+            LirTy::ArrayTy { inner, size } => {
+                let (inner_size, inner_align) = self.lir_type_size_and_align_impl(inner, visiting);
+                (inner_size.saturating_mul(*size), inner_align)
+            }
+            LirTy::StructType(name) => {
+                let visit_key = format!("S:{}", name);
+                if !visiting.insert(visit_key.clone()) {
+                    return (8, 8);
+                }
+
+                let mut offset = 0usize;
+                let mut max_align = 1usize;
+
+                if let Some(strukt) = self.hir_module.signature.structs.get(name.as_str()) {
+                    for field in strukt.fields.values() {
+                        let field_lir = self.hir_ty_to_lir_ty(field.ty, field.span);
+                        let (field_size, field_align) =
+                            self.lir_type_size_and_align_impl(&field_lir, visiting);
+                        let field_align = field_align.max(1);
+                        offset = Self::align_to(offset, field_align);
+                        offset = offset.saturating_add(field_size);
+                        max_align = max_align.max(field_align);
+                    }
+                } else {
+                    visiting.remove(&visit_key);
+                    return (8, 8);
+                }
+
+                visiting.remove(&visit_key);
+                (Self::align_to(offset, max_align), max_align)
+            }
+            LirTy::UnionType(name) => {
+                let visit_key = format!("U:{}", name);
+                if !visiting.insert(visit_key.clone()) {
+                    return (8, 8);
+                }
+
+                let mut max_size = 0usize;
+                let mut max_align = 1usize;
+
+                if let Some(union) = self.hir_module.signature.unions.get(name.as_str()) {
+                    for variant in union.variants.values() {
+                        let variant_lir = self.hir_ty_to_lir_ty(variant.ty, variant.span);
+                        let (variant_size, variant_align) =
+                            self.lir_type_size_and_align_impl(&variant_lir, visiting);
+                        max_size = max_size.max(variant_size);
+                        max_align = max_align.max(variant_align.max(1));
+                    }
+                } else {
+                    visiting.remove(&visit_key);
+                    return (8, 8);
+                }
+
+                visiting.remove(&visit_key);
+                (Self::align_to(max_size, max_align), max_align)
+            }
+        }
+    }
+
+    fn align_to(value: usize, align: usize) -> usize {
+        if align <= 1 {
+            value
+        } else {
+            value.div_ceil(align) * align
         }
     }
 }
@@ -1443,8 +1611,12 @@ impl std::fmt::Display for LirInstr {
                     .join(", ");
                 write!(f, "{} = raw_obj {} {{ {} }}", dst, ty, fields_str)
             }
-            LirInstr::Delete { ty, src } => {
-                write!(f, "delete {} {}", ty, src)
+            LirInstr::Delete {
+                ty,
+                src,
+                should_free,
+            } => {
+                write!(f, "delete(free={}) {} {}", should_free, ty, src)
             }
             LirInstr::FieldAccess {
                 ty: _,
@@ -1456,6 +1628,12 @@ impl std::fmt::Display for LirInstr {
             }
             LirInstr::Assign { ty: _, dst, src } => {
                 write!(f, "{} = assign {}", dst, src)
+            }
+            LirInstr::AggregateCopy { ty, dst, src } => {
+                write!(f, "agg_copy.{} {}, {}", ty, dst, src)
+            }
+            LirInstr::HeapAllocCopy { ty, dst, src } => {
+                write!(f, "heap_alloc_copy.{} {}, {}", ty, dst, src)
             }
             LirInstr::Cast { ty, from, dst, src } => {
                 write!(f, "{} = cast {}->{} {}", dst, from, ty, src)

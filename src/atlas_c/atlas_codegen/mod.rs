@@ -164,8 +164,8 @@ impl CCodeGen {
                     format!("{}{}*", if *is_const { "const " } else { "" }, inner_type)
                 }
             }
-            // For struct types, we use pointers
-            LirTy::StructType(name) => format!("{}*", name),
+            // Struct type is a value type in LIR. Pointer semantics are represented by LirTy::Ptr.
+            LirTy::StructType(name) => name.to_string(),
             // For union types, we don't use pointers for now
             LirTy::UnionType(name) => name.to_string(),
             LirTy::ArrayTy { inner, size } => format!("{}[{}]", self.codegen_type(inner), size),
@@ -476,11 +476,54 @@ impl CCodeGen {
                     Self::write_to_file(&mut self.c_file, &line, self.indent_level);
                 }
             },
-            LirInstr::Delete { ty: _, src } => {
-                // Delete instructions are ignored for now. We don't properly handle move semantics in C yet.
+            LirInstr::AggregateCopy { ty, dst, src } => {
+                let dest_str = self.codegen_operand(dst);
                 let src_str = self.codegen_operand(src);
-                let line = format!("free({});", src_str);
+                let line = match ty {
+                    LirTy::ArrayTy { inner, size } => {
+                        let elem = self.codegen_type(inner);
+                        format!(
+                            "memcpy({}, {}, sizeof({}) * {});",
+                            dest_str, src_str, elem, size
+                        )
+                    }
+                    LirTy::StructType(name) | LirTy::UnionType(name) => {
+                        format!("memcpy({}, {}, sizeof({}));", dest_str, src_str, name)
+                    }
+                    _ => {
+                        // Fallback for non-aggregate usages.
+                        format!("{} = {};", dest_str, src_str)
+                    }
+                };
                 Self::write_to_file(&mut self.c_file, &line, self.indent_level);
+            }
+            LirInstr::Delete {
+                ty,
+                src,
+                should_free,
+            } => {
+                let src_str = self.codegen_operand(src);
+
+                // Value delete: run destructor only (no free).
+                // Pointer delete: run destructor when applicable, then free.
+                match ty {
+                    LirTy::StructType(name) => {
+                        let dtor_line = format!("{}___dtor(&{});", name, src_str);
+                        Self::write_to_file(&mut self.c_file, &dtor_line, self.indent_level);
+                    }
+                    LirTy::Ptr { inner, .. } => {
+                        if let LirTy::StructType(name) = inner.as_ref() {
+                            let dtor_line = format!("{}___dtor({});", name, src_str);
+                            Self::write_to_file(&mut self.c_file, &dtor_line, self.indent_level);
+                        }
+                    }
+                    _ => {}
+                }
+
+                if *should_free {
+                    let free_line = format!("free({});", src_str);
+                    Self::write_to_file(&mut self.c_file, &free_line, self.indent_level);
+                }
             }
             LirInstr::Construct {
                 ty,
@@ -493,16 +536,31 @@ impl CCodeGen {
                 let type_name_str = type_str.trim_end_matches('*').to_string();
                 let mut args_str: Vec<String> =
                     args.iter().map(|arg| self.codegen_operand(arg)).collect();
-                args_str.insert(0, dest_str.clone());
+                args_str.insert(0, format!("&{}", dest_str));
                 let ctor_call = format!("{}_{}({})", type_name_str, ctor_kind, args_str.join(", "));
+                let line = format!("{} {} = {{0}};\n\t{};", type_str, dest_str, ctor_call);
+                Self::write_to_file(&mut self.c_file, &line, self.indent_level);
+            }
+            LirInstr::HeapAllocCopy { ty, dst, src } => {
+                let dest_str = self.codegen_operand(dst);
+                let src_str = self.codegen_operand(src);
+                let type_str = self.codegen_type(ty);
                 let line = format!(
-                    "{} {} = ({})malloc(sizeof({}));\n\
-                    \tif ({} == NULL) {{\n\
-                    \t\tprintf(\"Failed to allocate memory for {}\\n\");\n\
-                    \t\texit(1);\n\
-                    \t}}\n\
-                    \t{};\n",
-                    type_str, dest_str, type_str, type_name_str, dest_str, type_str, ctor_call
+                    "{}* {} = ({}*)malloc(sizeof({}));\n\
+                    	if ({} == NULL) {{\n\
+                    		printf(\"Failed to allocate memory for {}*\\n\");\n\
+                    		exit(1);\n\
+                    	}}\n\
+                    	memcpy({}, &{}, sizeof({}));",
+                    type_str,
+                    dest_str,
+                    type_str,
+                    type_str,
+                    dest_str,
+                    type_str,
+                    dest_str,
+                    src_str,
+                    type_str
                 );
                 Self::write_to_file(&mut self.c_file, &line, self.indent_level);
             }
@@ -608,7 +666,7 @@ impl CCodeGen {
                         format!("{}->{}", src_str, field_name)
                     }
                 } else {
-                    format!("({})->{}", src_str, field_name)
+                    format!("({}).{}", src_str, field_name)
                 }
             }
             LirOperand::Index { src, index } => {

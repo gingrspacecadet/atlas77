@@ -18,7 +18,8 @@ fun main() {
         i = i + 1u;
     }
     // Let's test this
-    printf("size_of<[int64; 5u]> = %d\n", size_of<[int64; 5u]>());
+    printf("size_of<[int64; 5u]> = %ld\n", size_of<[int64; 5u]>());
+    printf("size_of<InlineArray5<int64>> = %ld\n", size_of<InlineArray5<int64>>());
 }
 
 

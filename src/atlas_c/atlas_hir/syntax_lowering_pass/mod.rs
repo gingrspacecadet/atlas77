@@ -30,11 +30,11 @@ use crate::atlas_c::{
         expr::{
             HirBinaryOpExpr, HirBinaryOperator, HirBooleanLiteralExpr, HirCastExpr,
             HirCharLiteralExpr, HirDeleteExpr, HirExpr, HirFieldAccessExpr, HirFieldInit,
-            HirFloatLiteralExpr, HirFunctionCallExpr, HirIdentExpr, HirIndexingExpr,
-            HirIntegerLiteralExpr, HirIntrinsicCallExpr, HirListLiteralExpr, HirNewArrayExpr,
-            HirNewObjExpr, HirNullLiteralExpr, HirObjLiteralExpr, HirStaticAccessExpr,
-            HirStringLiteralExpr, HirThisLiteral, HirUnaryOp, HirUnitLiteralExpr,
-            HirUnsignedIntegerLiteralExpr, UnaryOpExpr,
+            HirFloatLiteralExpr, HirFunctionCallExpr, HirFunctionKind, HirIdentExpr,
+            HirIndexingExpr, HirIntegerLiteralExpr, HirIntrinsicCallExpr, HirListLiteralExpr,
+            HirNewArrayExpr, HirNewObjExpr, HirNullLiteralExpr, HirObjLiteralExpr,
+            HirStaticAccessExpr, HirStringLiteralExpr, HirThisLiteral, HirUnaryOp,
+            HirUnitLiteralExpr, HirUnsignedIntegerLiteralExpr, UnaryOpExpr,
         },
         item::{
             HirEnum, HirEnumVariant, HirFunction, HirStruct, HirStructConstructor, HirStructMethod,
@@ -1440,6 +1440,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     generics,
                     args_ty: Vec::new(),
                     ty: self.arena.types().get_uninitialized_ty(),
+                    kind: HirFunctionKind::Function,
                 });
                 Ok(hir)
             }
@@ -1456,19 +1457,65 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     HirTy::Generic(ty) => self.register_generic_type(ty),
                     other => other,
                 };
-                let hir = HirExpr::NewObj(HirNewObjExpr {
-                    span: node.span(),
-                    ty,
-                    args: obj
-                        .args
-                        .iter()
-                        .map(|arg| self.visit_expr(arg))
-                        .collect::<HirResult<Vec<_>>>()?,
-                    args_ty: Vec::new(),
-                    // Filled in during type checking
-                    is_copy_constructor_call: false,
-                });
-                Ok(hir)
+                let args = obj
+                    .args
+                    .iter()
+                    .map(|arg| self.visit_expr(arg))
+                    .collect::<HirResult<Vec<_>>>()?;
+
+                if obj.is_heap_allocation {
+                    let hir = HirExpr::NewObj(HirNewObjExpr {
+                        span: node.span(),
+                        ty,
+                        args,
+                        args_ty: Vec::new(),
+                        // Filled in during type checking
+                        is_copy_constructor_call: false,
+                    });
+                    Ok(hir)
+                } else {
+                    let callee = match ty {
+                        HirTy::Named(n) => HirExpr::Ident(HirIdentExpr {
+                            name: n.name,
+                            span: node.span(),
+                            ty: self.arena.types().get_uninitialized_ty(),
+                        }),
+                        HirTy::Generic(g) => HirExpr::Ident(HirIdentExpr {
+                            name: g.name,
+                            span: node.span(),
+                            ty: self.arena.types().get_uninitialized_ty(),
+                        }),
+                        _ => {
+                            let path = node.span().path;
+                            let src = crate::atlas_c::utils::get_file_content(path).unwrap();
+                            return Err(HirError::UnsupportedExpr(UnsupportedExpr {
+                                span: node.span(),
+                                expr: "new object constructor target".to_string(),
+                                src: NamedSource::new(path, src),
+                            }));
+                        }
+                    };
+
+                    let generics = match obj.ty {
+                        AstType::Generic(g) => g
+                            .inner_types
+                            .iter()
+                            .map(|inner| self.visit_ty(inner))
+                            .collect::<HirResult<Vec<_>>>()?,
+                        _ => Vec::new(),
+                    };
+
+                    Ok(HirExpr::Call(HirFunctionCallExpr {
+                        span: node.span(),
+                        callee_span: node.span(),
+                        callee: Box::new(callee),
+                        args,
+                        args_ty: Vec::new(),
+                        generics,
+                        ty: self.arena.types().get_uninitialized_ty(),
+                        kind: HirFunctionKind::Constructor,
+                    }))
+                }
             }
             AstExpr::ObjLiteral(obj) => {
                 // Let's get the actual type now:

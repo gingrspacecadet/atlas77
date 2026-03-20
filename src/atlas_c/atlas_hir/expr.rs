@@ -272,11 +272,10 @@ pub struct HirFunctionCallExpr<'hir> {
     pub generics: Vec<&'hir HirTy<'hir>>,
     /// Result type of the call
     pub ty: &'hir HirTy<'hir>,
-    // TODO: Add metada to the function call so after typechecking,
-    // every pass doesn't have to recheck it all the time.
-    // pub kind: HirFunctionKind,
+    pub kind: HirFunctionKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HirFunctionKind {
     Constructor,
     DefaultConstructor,
