@@ -18,25 +18,30 @@ fun main() {
     let t = 0;
     ptr_test(&t);
 
-    let moveable: *Moveable = new Moveable(0);
-    let moveable_2 = move<Moveable>(moveable);
-    printf("moveable.i = %ld\n", moveable->i);
-    printf("moveable_2.i = %ld\n", moveable_2.i);
+    let foo: Foo = Foo::__ctor(45);
+    printf("foo.i = %ld\n", foo.i);
+    let copied_from_foo = foo;
+    printf("copied_from_foo.i = %ld\n", copied_from_foo.i);
+    let moved_from_foo = move<Foo>(foo);
+    printf("moved_from_foo.i = %ld\n", moved_from_foo.i);
 }
 
-#[std::copyable]
-struct Moveable
+struct Foo
 {
 public:
     i: int64;
-    Moveable()
+    Foo()
     {
         this.i = 42;
     }
-    Moveable(dying_obj: *Moveable)
+    Foo(dying_obj: *Foo)
     {
         this->i = dying_obj->i;
         dying_obj->i = 0;
+    }
+    Foo(from: *const Foo)
+    {
+        this->i = 90;
     }
 }
 

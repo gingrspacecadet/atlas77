@@ -161,9 +161,15 @@ impl HirPrettyPrinter {
         self.print_constructor(&struct_name, &struct_def.constructor);
         self.writeln("");
 
-        if let Some(copy_ctor) = &struct_def.move_constructor {
+        if let Some(copy_ctor) = &struct_def.copy_constructor {
             self.writeln("// Copy Constructor");
             self.print_constructor(&struct_name, copy_ctor);
+            self.writeln("");
+        }
+
+        if let Some(move_ctor) = &struct_def.move_constructor {
+            self.writeln("// Move Constructor");
+            self.print_constructor(&struct_name, move_ctor);
             self.writeln("");
         }
 

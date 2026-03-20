@@ -1645,9 +1645,10 @@ impl<'hir> TypeChecker<'hir> {
                                         .types()
                                         .get_named_ty(name, static_access.field.span);
                                     func_expr.ty = ret_ty;
+                                    static_access.ty = ret_ty;
                                     Ok(ret_ty)
                                 }
-                                "copy" | "__copy_ctor" => {
+                                "__copy_ctor" => {
                                     if func_expr.args.len() != 1 {
                                         return Err(Self::not_enough_arguments_err(
                                             "copy constructor".to_string(),
@@ -1687,6 +1688,7 @@ impl<'hir> TypeChecker<'hir> {
                                         .types()
                                         .get_named_ty(name, static_access.field.span);
                                     func_expr.ty = ret_ty;
+                                    static_access.ty = ret_ty;
                                     Ok(ret_ty)
                                 }
                                 "__move_ctor" => {
@@ -1729,9 +1731,10 @@ impl<'hir> TypeChecker<'hir> {
                                         .types()
                                         .get_named_ty(name, static_access.field.span);
                                     func_expr.ty = ret_ty;
+                                    static_access.ty = ret_ty;
                                     Ok(ret_ty)
                                 }
-                                "default" | "__default_ctor" => {
+                                "__default_ctor" => {
                                     if func_expr.args.is_empty() {
                                         return Err(Self::not_enough_arguments_err(
                                             "default constructor".to_string(),
@@ -1746,6 +1749,7 @@ impl<'hir> TypeChecker<'hir> {
                                         .types()
                                         .get_named_ty(name, static_access.field.span);
                                     func_expr.ty = ret_ty;
+                                    static_access.ty = ret_ty;
                                     Ok(ret_ty)
                                 }
                                 "__dtor" => {
@@ -1760,6 +1764,7 @@ impl<'hir> TypeChecker<'hir> {
                                     }
                                     let unit_ty = self.arena.types().get_unit_ty();
                                     func_expr.ty = unit_ty;
+                                    static_access.ty = unit_ty;
                                     Ok(unit_ty)
                                 }
                                 _ => Err(Self::unknown_method_err(

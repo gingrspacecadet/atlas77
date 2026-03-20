@@ -482,14 +482,19 @@ impl CCodeGen {
                 let line = format!("free({});", src_str);
                 Self::write_to_file(&mut self.c_file, &line, self.indent_level);
             }
-            LirInstr::Construct { ty, dst, args } => {
+            LirInstr::Construct {
+                ty,
+                dst,
+                args,
+                ctor_kind,
+            } => {
                 let dest_str = self.codegen_operand(dst);
                 let type_str = self.codegen_type(ty);
                 let type_name_str = type_str.trim_end_matches('*').to_string();
                 let mut args_str: Vec<String> =
                     args.iter().map(|arg| self.codegen_operand(arg)).collect();
                 args_str.insert(0, dest_str.clone());
-                let ctor_call = format!("{}_new({})", type_name_str, args_str.join(", "));
+                let ctor_call = format!("{}_{}({})", type_name_str, ctor_kind, args_str.join(", "));
                 let line = format!(
                     "{} {} = ({})malloc(sizeof({}));\n\
                     \tif ({} == NULL) {{\n\
@@ -603,7 +608,7 @@ impl CCodeGen {
                         format!("{}->{}", src_str, field_name)
                     }
                 } else {
-                    format!("({}).{}", src_str, field_name)
+                    format!("({})->{}", src_str, field_name)
                 }
             }
             LirOperand::Index { src, index } => {

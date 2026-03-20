@@ -251,10 +251,17 @@ pub enum LirInstr {
         args: Vec<LirOperand>,
     },
     /// Allocate a new value of the given type
+    /// And then call the constructor on it
     Construct {
         ty: LirTy,
         dst: LirOperand,
         args: Vec<LirOperand>,
+        /// Can be:
+        /// __ctor
+        /// __copy_ctor
+        /// __move_ctor
+        /// __default_ctor
+        ctor_kind: String,
     },
     ConstructArray {
         ty: LirTy,

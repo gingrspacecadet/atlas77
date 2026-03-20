@@ -229,7 +229,7 @@ impl<'hir> HirLoweringPass<'hir> {
         functions.push(self.lower_constructor(
             struct_body.name,
             &struct_body.constructor,
-            "new",
+            "__ctor",
         )?);
         if let Some(move_ctor) = &struct_body.move_constructor {
             functions.push(self.lower_constructor(struct_body.name, move_ctor, "__move_ctor")?);
@@ -802,6 +802,7 @@ impl<'hir> HirLoweringPass<'hir> {
                     ty: self.hir_ty_to_lir_ty(new_obj.ty, new_obj.span),
                     dst: dest.clone(),
                     args,
+                    ctor_kind: String::from("__ctor"),
                 })?;
                 Ok(dest)
             }
@@ -944,13 +945,45 @@ impl<'hir> HirLoweringPass<'hir> {
                     if let HirExpr::FieldAccess(field_access) = call.callee.as_ref() {
                         let target_operand = self.lower_expr(&field_access.target)?;
                         args.push(target_operand);
+                    } else if let HirExpr::StaticAccess(static_access) = call.callee.as_ref() {
+                        for arg in &call.args {
+                            args.push(self.lower_expr(arg)?);
+                        }
+                        match static_access.field.name {
+                            "__ctor" | "__copy_ctor" | "__move_ctor" | "__default_ctor" => {
+                                let dest = self.new_temp();
+                                self.emit(LirInstr::Construct {
+                                    ty: self.hir_ty_to_lir_ty(static_access.ty, static_access.span),
+                                    dst: dest.clone(),
+                                    args,
+                                    ctor_kind: String::from(static_access.field.name),
+                                })?;
+                                return Ok(dest);
+                            }
+                            "__dtor" => {
+                                return Err(unsupported_expr(
+                                    expr.span(),
+                                    String::from("Direct destructor call isn't supported yet."),
+                                ));
+                            }
+                            _ => {
+                                return Err(unsupported_expr(
+                                    expr.span(),
+                                    String::from(
+                                        "A function taking an implicit \"this\" has to be a field access or \
+                                        a special static access function (e.g.: `T::__ctor`, `T::__move_ctor`, \
+                                        `T::__copy_ctor`, `T::__dtor`, `T::__default_ctor`)",
+                                    ),
+                                ));
+                            }
+                        }
                     } else {
                         return Err(unsupported_expr(
                             expr.span(),
                             String::from(
-                                "A function taking an implicit \"this\" has to be a field access \
-                                TODO: Implement implicit this for `T::__move_ctor`, `T::__copy_ctor`, \
-                                `T::__ctor`, `T::__default_ctor`, `T::__dtor`",
+                                "A function taking an implicit \"this\" has to be a field access or \
+                                a special static access function (e.g.: `T::__ctor`, `T::__move_ctor`, \
+                                `T::__copy_ctor`, `T::__dtor`, `T::__default_ctor`)",
                             ),
                         ));
                     }
@@ -1026,9 +1059,21 @@ impl<'hir> HirLoweringPass<'hir> {
             }
 
             HirExpr::Copy(copy_expr) => {
-                // For primitives, copy is just a value use
-                // For objects, this would call the copy constructor
-                self.lower_expr(&copy_expr.expr)
+                if copy_expr.ty.is_primitive() {
+                    // For primitives, copy is just a value use
+                    // For objects, this would call the copy constructor
+                    self.lower_expr(&copy_expr.expr)
+                } else {
+                    let arg = self.lower_expr(&*copy_expr.expr)?;
+                    let dest = self.new_temp();
+                    self.emit(LirInstr::Construct {
+                        ty: self.hir_ty_to_lir_ty(copy_expr.ty, copy_expr.span),
+                        dst: dest.clone(),
+                        args: vec![arg],
+                        ctor_kind: String::from("__copy_ctor"),
+                    })?;
+                    Ok(dest)
+                }
             }
 
             HirExpr::Delete(delete_expr) => {
@@ -1346,13 +1391,18 @@ impl std::fmt::Display for LirInstr {
                     write!(f, "call_extern @{}({})", func_name, args_str)
                 }
             }
-            LirInstr::Construct { ty, dst, args } => {
+            LirInstr::Construct {
+                ty,
+                dst,
+                args,
+                ctor_kind,
+            } => {
                 let args_str = args
                     .iter()
                     .map(|a| format!("{}", a))
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "{} = new {}({})", dst, ty, args_str)
+                write!(f, "{} = {} {}({})", dst, ctor_kind, ty, args_str)
             }
             LirInstr::ConstructArray { ty, dst, size } => {
                 write!(f, "{} = new_array {}[{}]", dst, ty, size)
