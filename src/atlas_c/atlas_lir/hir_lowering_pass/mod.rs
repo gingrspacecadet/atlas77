@@ -309,7 +309,7 @@ impl<'hir> HirLoweringPass<'hir> {
         let mut args = Vec::new();
         if matches!(
             method.signature.modifier,
-            |HirStructMethodModifier::Mutable| HirStructMethodModifier::Consuming
+            | HirStructMethodModifier::Mutable | HirStructMethodModifier::Consuming | HirStructMethodModifier::Const
         ) {
             // The first parameter is always "this"
             self.param_map.insert("this", 0);
@@ -318,11 +318,7 @@ impl<'hir> HirLoweringPass<'hir> {
                 inner: Box::new(LirTy::StructType(struct_name.to_string())),
             });
         } else {
-            self.param_map.insert("this", 0);
-            args.push(LirTy::Ptr {
-                is_const: true,
-                inner: Box::new(LirTy::StructType(struct_name.to_string())),
-            });
+            // Static method, no "this" parameter
         }
         // Build parameter map
         for param in method.signature.params.iter() {
