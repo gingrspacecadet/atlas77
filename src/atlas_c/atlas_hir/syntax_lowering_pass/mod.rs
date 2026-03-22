@@ -1619,7 +1619,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     AstLiteral::Integer(i) => HirExpr::IntegerLiteral(HirIntegerLiteralExpr {
                         span: l.span(),
                         value: i.value,
-                        ty: self.arena.types().get_int_ty(64),
+                        ty: self.arena.types().get_literal_int_ty(i.value, l.span()),
                     }),
                     AstLiteral::Boolean(b) => HirExpr::BooleanLiteral(HirBooleanLiteralExpr {
                         span: l.span(),
@@ -1629,13 +1629,13 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     AstLiteral::Float(f) => HirExpr::FloatLiteral(HirFloatLiteralExpr {
                         span: l.span(),
                         value: f.value,
-                        ty: self.arena.types().get_float_ty(64),
+                        ty: self.arena.types().get_literal_float_ty(f.value, l.span()),
                     }),
                     AstLiteral::UnsignedInteger(u) => {
                         HirExpr::UnsignedIntegerLiteral(HirUnsignedIntegerLiteralExpr {
                             span: l.span(),
                             value: u.value,
-                            ty: self.arena.types().get_uint_ty(64),
+                            ty: self.arena.types().get_literal_uint_ty(u.value, l.span()),
                         })
                     }
                     AstLiteral::ThisLiteral(_) => HirExpr::ThisLiteral(HirThisLiteral {

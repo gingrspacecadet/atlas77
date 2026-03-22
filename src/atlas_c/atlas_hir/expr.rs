@@ -207,7 +207,6 @@ pub struct HirDeleteExpr<'hir> {
 }
 
 #[derive(Debug, Clone)]
-#[deprecated(note = "This will be changed to use the HirNewExpr instead.")]
 pub struct HirNewObjExpr<'hir> {
     pub span: Span,
     pub ty: &'hir HirTy<'hir>,

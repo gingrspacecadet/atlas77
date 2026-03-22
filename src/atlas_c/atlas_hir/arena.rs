@@ -10,7 +10,10 @@ use super::ty::{
     HirStringTy, HirTy, HirTyId, HirUninitializedTy, HirUnitTy, HirUnsignedIntTy,
 };
 use crate::atlas_c::{
-    atlas_hir::ty::{HirFunctionTy, HirPtrTy},
+    atlas_hir::ty::{
+        HirFunctionTy, HirLiteralFloatTy, HirLiteralIntegerTy, HirLiteralUnsignedIntegerTy,
+        HirPtrTy,
+    },
     utils::Span,
 };
 use bumpalo::Bump;
@@ -100,6 +103,14 @@ impl<'arena> TypeArena<'arena> {
         })
     }
 
+    pub fn get_literal_int_ty(&'arena self, value: i64, span: Span) -> &'arena HirTy<'arena> {
+        let id = HirTyId::compute_literal_int_ty_id(value);
+        self.intern.borrow_mut().entry(id).or_insert_with(|| {
+            self.allocator
+                .alloc(HirTy::LiteralInteger(HirLiteralIntegerTy { value, span }))
+        })
+    }
+
     pub fn get_float_ty(&'arena self, size_in_bits: u8) -> &'arena HirTy<'arena> {
         let id = HirTyId::compute_float_ty_id(size_in_bits);
         self.intern.borrow_mut().entry(id).or_insert_with(|| {
@@ -108,11 +119,32 @@ impl<'arena> TypeArena<'arena> {
         })
     }
 
+    pub fn get_literal_float_ty(&'arena self, value: f64, span: Span) -> &'arena HirTy<'arena> {
+        let id = HirTyId::compute_literal_float_ty_id(value);
+        self.intern.borrow_mut().entry(id).or_insert_with(|| {
+            self.allocator.alloc(HirTy::LiteralFloat(HirLiteralFloatTy {
+                value: value.to_bits(),
+                span,
+            }))
+        })
+    }
+
     pub fn get_uint_ty(&'arena self, size_in_bits: u8) -> &'arena HirTy<'arena> {
         let id = HirTyId::compute_uint_ty_id(size_in_bits);
         self.intern.borrow_mut().entry(id).or_insert_with(|| {
             self.allocator
                 .alloc(HirTy::UnsignedInteger(HirUnsignedIntTy { size_in_bits }))
+        })
+    }
+
+    pub fn get_literal_uint_ty(&'arena self, value: u64, span: Span) -> &'arena HirTy<'arena> {
+        let id = HirTyId::compute_literal_uint_ty_id(value);
+        self.intern.borrow_mut().entry(id).or_insert_with(|| {
+            self.allocator
+                .alloc(HirTy::LiteralUnsignedInteger(HirLiteralUnsignedIntegerTy {
+                    value,
+                    span,
+                }))
         })
     }
 

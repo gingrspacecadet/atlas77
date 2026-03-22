@@ -413,22 +413,6 @@ impl<'hir> TypeChecker<'hir> {
                 Ok(())
             }
             HirStatement::Return(ret) => {
-                let actual_ret_ty = self.check_expr(&mut ret.value)?;
-
-                // Check for returning a reference to a local variable (directly or through a struct)
-                let local_refs = self.get_local_ptr_targets(&ret.value);
-                if let Some(local_var_name) = local_refs.first() {
-                    let path = ret.span.path;
-                    let src = utils::get_file_content(path).unwrap();
-                    return Err(HirError::ReturningReferenceToLocalVariable(
-                        ReturningPointerToLocalVariableError {
-                            span: ret.value.span(),
-                            var_name: local_var_name.to_string(),
-                            src: NamedSource::new(path, src),
-                        },
-                    ));
-                }
-
                 let (expected_ret_ty, span) = if let Some(name) = self.current_class_name {
                     //This means we're in a class method
                     let class = self.signature.structs.get(name).unwrap();
@@ -447,6 +431,23 @@ impl<'hir> TypeChecker<'hir> {
                 } else {
                     (self.arena.types().get_uninitialized_ty(), ret.span)
                 };
+
+                self.retag_integer_literal_for_expected_ty(expected_ret_ty, &mut ret.value);
+                let actual_ret_ty = self.check_expr(&mut ret.value)?;
+
+                // Check for returning a reference to a local variable (directly or through a struct)
+                let local_refs = self.get_local_ptr_targets(&ret.value);
+                if let Some(local_var_name) = local_refs.first() {
+                    let path = ret.span.path;
+                    let src = utils::get_file_content(path).unwrap();
+                    return Err(HirError::ReturningReferenceToLocalVariable(
+                        ReturningPointerToLocalVariableError {
+                            span: ret.value.span(),
+                            var_name: local_var_name.to_string(),
+                            src: NamedSource::new(path, src),
+                        },
+                    ));
+                }
                 self.is_equivalent_ty(expected_ret_ty, span, actual_ret_ty, ret.value.span())
             }
             HirStatement::While(w) => {
@@ -520,6 +521,9 @@ impl<'hir> TypeChecker<'hir> {
                 Ok(())
             }
             HirStatement::Const(c) => {
+                if c.ty != self.arena.types().get_uninitialized_ty() {
+                    self.retag_integer_literal_for_expected_ty(c.ty, &mut c.value);
+                }
                 let expr_ty = self.check_expr(&mut c.value)?;
                 let const_ty = if c.ty == self.arena.types().get_uninitialized_ty() {
                     //Need inference
@@ -563,6 +567,9 @@ impl<'hir> TypeChecker<'hir> {
                 )
             }
             HirStatement::Let(l) => {
+                if l.ty != self.arena.types().get_uninitialized_ty() {
+                    self.retag_integer_literal_for_expected_ty(l.ty, &mut l.value);
+                }
                 let expr_ty = self.check_expr(&mut l.value)?;
                 let var_ty = if l.ty == self.arena.types().get_uninitialized_ty() {
                     //Need inference
@@ -600,6 +607,7 @@ impl<'hir> TypeChecker<'hir> {
             }
             HirStatement::Assign(assign) => {
                 let dst_ty = self.check_expr(&mut assign.dst)?;
+                self.retag_integer_literal_for_expected_ty(dst_ty, &mut assign.val);
                 let val_ty = self.check_expr(&mut assign.val)?;
 
                 // Check if we are dereferencing a const reference (mutation through const ref)
@@ -1212,6 +1220,7 @@ impl<'hir> TypeChecker<'hir> {
                         .iter()
                         .zip(new_obj_expr.args.iter_mut())
                     {
+                        self.retag_integer_literal_for_expected_ty(param.ty, arg);
                         let arg_ty = self.check_expr(arg)?;
                         self.is_equivalent_ty(param.ty, param.span, arg_ty, arg.span())?;
                     }
@@ -1243,6 +1252,7 @@ impl<'hir> TypeChecker<'hir> {
 
                         let param = &copy_ctor.params.first().unwrap();
                         let arg = new_obj_expr.args.first_mut().unwrap();
+                        self.retag_integer_literal_for_expected_ty(param.ty, arg);
                         let arg_ty = self.check_expr(arg)?;
                         self.is_equivalent_ty(param.ty, param.span, arg_ty, arg.span())?;
                         new_obj_expr.is_copy_constructor_call = true;
@@ -1429,6 +1439,7 @@ impl<'hir> TypeChecker<'hir> {
                         }
 
                         for (param, arg) in func.params.iter().zip(func_expr.args.iter_mut()) {
+                            self.retag_integer_literal_for_expected_ty(param.ty, arg);
                             let arg_ty = self.check_expr(arg)?;
                             self.is_equivalent_ty(param.ty, param.span, arg_ty, arg.span())?;
                             // Store the expected parameter type for ownership analysis
@@ -1589,6 +1600,7 @@ impl<'hir> TypeChecker<'hir> {
                                 .iter()
                                 .zip(func_expr.args.iter_mut())
                             {
+                                self.retag_integer_literal_for_expected_ty(param.ty, arg);
                                 let arg_ty = self.check_expr(arg)?;
                                 self.is_equivalent_ty(param.ty, param.span, arg_ty, arg.span())?;
                                 // Store the expected parameter type for ownership analysis
@@ -1679,6 +1691,7 @@ impl<'hir> TypeChecker<'hir> {
                                 .iter()
                                 .zip(func_expr.args.iter_mut())
                             {
+                                self.retag_integer_literal_for_expected_ty(param.ty, arg);
                                 let arg_ty = self.check_expr(arg)?;
                                 self.is_equivalent_ty(param.ty, param.span, arg_ty, arg.span())?;
                                 // Store the expected parameter type for ownership analysis
@@ -1712,6 +1725,7 @@ impl<'hir> TypeChecker<'hir> {
                                         .iter()
                                         .zip(func_expr.args.iter_mut())
                                     {
+                                        self.retag_integer_literal_for_expected_ty(param.ty, arg);
                                         let arg_ty = self.check_expr(arg)?;
                                         self.is_equivalent_ty(
                                             param.ty,
@@ -2357,6 +2371,47 @@ impl<'hir> TypeChecker<'hir> {
         matches!(ty, HirTy::PtrTy(p) if p.is_const)
     }
 
+    /// Retag integer literals to unsigned literals when an unsigned expected type is known
+    /// and the value fits. This helps later passes rely on a concrete, context-aware type.
+    fn retag_integer_literal_for_expected_ty(
+        &mut self,
+        expected_ty: &HirTy<'hir>,
+        expr: &mut HirExpr<'hir>,
+    ) {
+        match expr {
+            HirExpr::Unary(unary) if unary.op.is_none() => {
+                self.retag_integer_literal_for_expected_ty(expected_ty, unary.expr.as_mut());
+            }
+            HirExpr::IntegerLiteral(i) => {
+                let expected_uint = match expected_ty {
+                    HirTy::UnsignedInteger(u) => u,
+                    _ => return,
+                };
+
+                if i.value < 0 {
+                    return;
+                }
+
+                let value = i64::cast_unsigned(i.value);
+                let lit_uint_ty = self.arena.types().get_literal_uint_ty(value, i.span);
+
+                // Only retag when assignment is already valid for the expected unsigned type.
+                if self
+                    .is_equivalent_ty(expected_ty, i.span, lit_uint_ty, i.span)
+                    .is_ok()
+                {
+                    let concrete_expected = self.arena.types().get_uint_ty(expected_uint.size_in_bits);
+                    *expr = HirExpr::UnsignedIntegerLiteral(HirUnsignedIntegerLiteralExpr {
+                        value,
+                        span: i.span,
+                        ty: concrete_expected,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn is_mutable_ptr_ty(&self, ty: &HirTy<'_>) -> bool {
         matches!(ty, HirTy::PtrTy(p) if !p.is_const)
     }
@@ -2370,6 +2425,14 @@ impl<'hir> TypeChecker<'hir> {
         found_span: Span,
     ) -> HirResult<()> {
         match (expected_ty, found_ty) {
+            (HirTy::UnsignedInteger(_), HirTy::LiteralInteger(li)) => {
+                // e.g.: If we expect a uint8 but found a `int16 /* 255 */` it should still be accepted because the literal value can fit into the expected type
+                let lu = self
+                    .arena
+                    .types()
+                    .get_literal_uint_ty(i64::cast_unsigned(li.value), li.span);
+                self.is_equivalent_ty(expected_ty, expected_span, lu, found_span)
+            }
             //(HirTy::Int64(_), HirTy::UInt64(_)) | (HirTy::UInt64(_), HirTy::Int64(_)) => Ok(()),
             (HirTy::Generic(g), HirTy::Named(n)) | (HirTy::Named(n), HirTy::Generic(g)) => {
                 if MonomorphizationPass::generate_mangled_name(self.arena, g, "struct") == n.name {
@@ -2432,8 +2495,32 @@ impl<'hir> TypeChecker<'hir> {
                     ))
                 }
             }
+            (HirTy::UnsignedInteger(u), HirTy::LiteralUnsignedInteger(lu)) => {
+                if u.size_in_bits >= lu.get_minimal_uint_ty().size_in_bits {
+                    Ok(())
+                } else {
+                    Err(Self::type_mismatch_err(
+                        &format!("{}", expected_ty),
+                        &expected_span,
+                        &format!("{}", found_ty),
+                        &found_span,
+                    ))
+                }
+            }
             (HirTy::Float(i), HirTy::Float(j)) => {
                 if i.size_in_bits >= j.size_in_bits {
+                    Ok(())
+                } else {
+                    Err(Self::type_mismatch_err(
+                        &format!("{}", expected_ty),
+                        &expected_span,
+                        &format!("{}", found_ty),
+                        &found_span,
+                    ))
+                }
+            }
+            (HirTy::Float(f), HirTy::LiteralFloat(lf)) => {
+                if f.size_in_bits >= lf.get_float_ty().size_in_bits {
                     Ok(())
                 } else {
                     Err(Self::type_mismatch_err(

@@ -72,6 +72,9 @@ static double timer_elapsed_s(uint64_t start_ns)
 #include <stdint.h>
 #else
 typedef unsigned long long uint64_t;
+typedef unsigned int uint32_t;
+typedef long long int64_t;
+typedef int int32_t;
 #endif
 // Should this be conditionally included?
 #include <stdio.h>
@@ -92,9 +95,6 @@ static inline void panic(const char *message)
     fprintf(stderr, "PANIC: %s\n", message);
     exit(1);
 }
-
-int64_t fib(int64_t arg_0);
-void main();
 
 typedef struct
 {

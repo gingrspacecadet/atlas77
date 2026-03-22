@@ -8,11 +8,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 pub struct HirTyId(u64);
 
 const INTEGER_TY_ID: u8 = 0x01;
-const FLOAT_TY_ID: u8 = 0x02;
-const UNSIGNED_INTEGER_TY_ID: u8 = 0x03;
-const BOOLEAN_TY_ID: u8 = 0x04;
-const UNIT_TY_ID: u8 = 0x05;
-const CHAR_TY_ID: u8 = 0x06;
+const FLOAT_TY_ID: u8 = 0x03;
+const UNSIGNED_INTEGER_TY_ID: u8 = 0x05;
+const BOOLEAN_TY_ID: u8 = 0x06;
+const UNIT_TY_ID: u8 = 0x07;
+const CHAR_TY_ID: u8 = 0x08;
 const STR_TY_ID: u8 = 0x10;
 const FUNCTION_TY_ID: u8 = 0x28;
 const SLICE_TY_ID: u8 = 0x35;
@@ -30,8 +30,28 @@ impl HirTyId {
         Self(hasher.finish())
     }
 
+    pub fn compute_literal_int_ty_id(value: i64) -> Self {
+        let mut hasher = DefaultHasher::new();
+        // Keep literal values distinct in the arena so value-sensitive checks
+        // (e.g. fitting into uint8) don't accidentally reuse another literal's value.
+        (INTEGER_TY_ID, value).hash(&mut hasher);
+        Self(hasher.finish())
+    }
+
     pub fn compute_float_ty_id(size_in_bits: u8) -> Self {
         let mut hasher = DefaultHasher::new();
+        (FLOAT_TY_ID, size_in_bits).hash(&mut hasher);
+        Self(hasher.finish())
+    }
+
+    pub fn compute_literal_float_ty_id(value: f64) -> Self {
+        let mut hasher = DefaultHasher::new();
+        // We only support 32-bit and 64-bit float literals. If the value can fit in a 32-bit float, we use that. Otherwise, we use a 64-bit float.
+        let size_in_bits = if value >= f32::MIN as f64 && value <= f32::MAX as f64 {
+            32
+        } else {
+            64
+        };
         (FLOAT_TY_ID, size_in_bits).hash(&mut hasher);
         Self(hasher.finish())
     }
@@ -39,6 +59,13 @@ impl HirTyId {
     pub fn compute_uint_ty_id(size_in_bits: u8) -> Self {
         let mut hasher = DefaultHasher::new();
         (UNSIGNED_INTEGER_TY_ID, size_in_bits).hash(&mut hasher);
+        Self(hasher.finish())
+    }
+
+    pub fn compute_literal_uint_ty_id(value: u64) -> Self {
+        let mut hasher = DefaultHasher::new();
+        // Keep unsigned literal values distinct for the same reason as signed literals.
+        (UNSIGNED_INTEGER_TY_ID, value).hash(&mut hasher);
         Self(hasher.finish())
     }
 
@@ -120,8 +147,15 @@ impl<'hir> From<&'hir HirTy<'hir>> for HirTyId {
     fn from(value: &'hir HirTy<'hir>) -> Self {
         match value {
             HirTy::Integer(i) => Self::compute_int_ty_id(i.size_in_bits),
+            HirTy::LiteralInteger(li) => {
+                Self::compute_int_ty_id(li.get_minimal_int_ty().size_in_bits)
+            }
             HirTy::Float(f) => Self::compute_float_ty_id(f.size_in_bits),
+            HirTy::LiteralFloat(lf) => Self::compute_float_ty_id(lf.get_float_ty().size_in_bits),
             HirTy::UnsignedInteger(u) => Self::compute_uint_ty_id(u.size_in_bits),
+            HirTy::LiteralUnsignedInteger(lu) => {
+                Self::compute_uint_ty_id(lu.get_minimal_uint_ty().size_in_bits)
+            }
             HirTy::Char(_) => Self::compute_char_ty_id(),
             HirTy::Boolean(_) => Self::compute_boolean_ty_id(),
             HirTy::Unit(_) => Self::compute_unit_ty_id(),
@@ -151,8 +185,11 @@ impl<'hir> From<&'hir HirTy<'hir>> for HirTyId {
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum HirTy<'hir> {
     Integer(HirIntegerTy),
+    LiteralInteger(HirLiteralIntegerTy),
     Float(HirFloatTy),
+    LiteralFloat(HirLiteralFloatTy),
     UnsignedInteger(HirUnsignedIntTy),
+    LiteralUnsignedInteger(HirLiteralUnsignedIntegerTy),
     Char(HirCharTy),
     Unit(HirUnitTy),
     Boolean(HirBooleanTy),
@@ -271,8 +308,13 @@ impl HirTy<'_> {
     pub fn get_valid_c_string(&self) -> String {
         match self {
             HirTy::Integer(_) => "int64".to_string(),
+            HirTy::LiteralInteger(li) => format!("int{}", li.get_minimal_int_ty().size_in_bits),
             HirTy::Float(_) => "float64".to_string(),
+            HirTy::LiteralFloat(lf) => format!("float{}", lf.get_float_ty().size_in_bits),
             HirTy::UnsignedInteger(_) => "uint64".to_string(),
+            HirTy::LiteralUnsignedInteger(lu) => {
+                format!("uint{}", lu.get_minimal_uint_ty().size_in_bits)
+            }
             HirTy::Char(_) => "char".to_string(),
             HirTy::Unit(_) => "unit".to_string(),
             HirTy::Boolean(_) => "bool".to_string(),
@@ -320,8 +362,29 @@ impl fmt::Display for HirTy<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             HirTy::Integer(i) => write!(f, "int{}", i.size_in_bits),
+            // Represent the literal integer type as intN /* value */. For example, 42<int8> will be represented as int8 /* 42 */
+            HirTy::LiteralInteger(li) => write!(
+                f,
+                "int{} /* {} */",
+                li.get_minimal_int_ty().size_in_bits,
+                li.value
+            ),
             HirTy::Float(flt) => write!(f, "float{}", flt.size_in_bits),
+            // Represent the literal float type as floatN /* value */. For example, 3.14<float32> will be represented as float32 /* 3.14 */
+            HirTy::LiteralFloat(lf) => write!(
+                f,
+                "float{} /* {} */",
+                lf.get_float_ty().size_in_bits,
+                f64::from_bits(lf.value)
+            ),
             HirTy::UnsignedInteger(ui) => write!(f, "uint{}", ui.size_in_bits),
+            // Represent the literal unsigned integer type as uintN /* value */. For example, 42<uint8> will be represented as uint8 /* 42 */
+            HirTy::LiteralUnsignedInteger(lu) => write!(
+                f,
+                "uint{} /* {} */",
+                lu.get_minimal_uint_ty().size_in_bits,
+                lu.value
+            ),
             HirTy::Char(_) => write!(f, "char"),
             HirTy::Unit(_) => write!(f, "unit"),
             HirTy::Boolean(_) => write!(f, "bool"),
@@ -422,13 +485,76 @@ pub struct HirIntegerTy {
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct HirLiteralIntegerTy {
+    pub value: i64,
+    pub span: Span,
+}
+
+impl HirLiteralIntegerTy {
+    /// Returns the minimal integer type that can hold the value. For example, 42<int8> or 1000<int16>
+    pub fn get_minimal_int_ty(&self) -> HirIntegerTy {
+        let value = self.value;
+        if value >= i8::MIN as i64 && value <= i8::MAX as i64 {
+            HirIntegerTy { size_in_bits: 8 }
+        } else if value >= i16::MIN as i64 && value <= i16::MAX as i64 {
+            HirIntegerTy { size_in_bits: 16 }
+        } else if value >= i32::MIN as i64 && value <= i32::MAX as i64 {
+            HirIntegerTy { size_in_bits: 32 }
+        } else {
+            HirIntegerTy { size_in_bits: 64 }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct HirFloatTy {
     pub size_in_bits: u8,
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct HirLiteralFloatTy {
+    /// We store a u64 to satisfy Eq, Hash and PartialEq. The bits are interpreted as an f64.
+    /// We can use [`f64::from_bits()`] to get the f64 value back when needed.
+    pub value: u64,
+    pub span: Span,
+}
+
+impl HirLiteralFloatTy {
+    pub fn get_float_ty(&self) -> HirFloatTy {
+        // We only support 32-bit and 64-bit float literals. If the value can fit in a 32-bit float, we use that. Otherwise, we use a 64-bit float.
+        let f = f64::from_bits(self.value);
+        if f >= f32::MIN as f64 && f <= f32::MAX as f64 {
+            HirFloatTy { size_in_bits: 32 }
+        } else {
+            HirFloatTy { size_in_bits: 64 }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct HirUnsignedIntTy {
     pub size_in_bits: u8,
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct HirLiteralUnsignedIntegerTy {
+    pub value: u64,
+    pub span: Span,
+}
+
+impl HirLiteralUnsignedIntegerTy {
+    pub fn get_minimal_uint_ty(&self) -> HirUnsignedIntTy {
+        let value = self.value;
+        if value <= u8::MAX as u64 {
+            HirUnsignedIntTy { size_in_bits: 8 }
+        } else if value <= u16::MAX as u64 {
+            HirUnsignedIntTy { size_in_bits: 16 }
+        } else if value <= u32::MAX as u64 {
+            HirUnsignedIntTy { size_in_bits: 32 }
+        } else {
+            HirUnsignedIntTy { size_in_bits: 64 }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
