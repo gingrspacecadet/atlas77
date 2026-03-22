@@ -56,6 +56,7 @@ pub struct HirStructSignature<'hir> {
     pub had_user_defined_default_constructor: bool,
     pub is_instantiated: bool,
     pub docstring: Option<&'hir str>,
+    pub is_extern: bool,
 }
 
 #[derive(Debug, Clone)]

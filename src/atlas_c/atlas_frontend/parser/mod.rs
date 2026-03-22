@@ -9,9 +9,9 @@ use miette::NamedSource;
 
 use crate::atlas_c::atlas_frontend::parser::{
     ast::{
-        AstArg, AstEnum, AstEnumVariant, AstExternStruct, AstFlag, AstGlobalConst,
-        AstInlineArrayType, AstNullLiteral, AstObjLiteralExpr, AstObjLiteralField, AstPtrTy,
-        AstStdGenericConstraint, AstUnion, ConstructorKind,
+        AstArg, AstEnum, AstEnumVariant, AstFlag, AstGlobalConst, AstInlineArrayType,
+        AstNullLiteral, AstObjLiteralExpr, AstObjLiteralField, AstPtrTy, AstStdGenericConstraint,
+        AstUnion, ConstructorKind,
     },
     error::{
         ConstTypeNotSupportedYetError, DestructorWithParametersError, FlagDoesntExistError,
@@ -698,6 +698,7 @@ impl<'ast> Parser<'ast> {
             vis: AstVisibility::default(),
             flag: AstFlag::default(),
             docstring: None,
+            is_extern: false,
         };
         Ok(node)
     }
@@ -1908,27 +1909,9 @@ impl<'ast> Parser<'ast> {
         Ok(node)
     }
 
-    fn parse_extern_struct(&mut self) -> ParseResult<AstExternStruct<'ast>> {
-        let start = self.expect(TokenKind::KwStruct)?;
-
-        let name = self.parse_identifier()?;
-
-        // Extern structs cannot be generic for now
-
-        self.expect(TokenKind::LBrace)?;
-        let mut fields = vec![];
-        while self.current().kind() != TokenKind::RBrace {
-            fields.push(self.parse_obj_field()?);
-            self.expect(TokenKind::Semicolon)?;
-        }
-        self.expect(TokenKind::RBrace)?;
-        let node = AstExternStruct {
-            span: Span::union_span(&start.span(), &self.current().span()),
-            name: self.arena.alloc(name),
-            fields: self.arena.alloc_vec(fields),
-            vis: AstVisibility::default(),
-            docstring: None,
-        };
+    fn parse_extern_struct(&mut self) -> ParseResult<AstStruct<'ast>> {
+        let mut node = self.parse_struct()?;
+        node.is_extern = true;
         Ok(node)
     }
 

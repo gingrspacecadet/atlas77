@@ -124,6 +124,7 @@ pub struct LirUnion {
 pub struct LirStruct {
     pub name: String,
     pub fields: HashMap<String, LirTy>,
+    pub is_extern: bool,
 }
 
 #[derive(Debug, Clone)]

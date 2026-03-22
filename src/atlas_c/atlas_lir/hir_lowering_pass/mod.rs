@@ -219,6 +219,7 @@ impl<'hir> HirLoweringPass<'hir> {
                     )
                 })
                 .collect(),
+            is_extern: struct_body.signature.is_extern,
         };
 
         for method in struct_body.methods.iter() {

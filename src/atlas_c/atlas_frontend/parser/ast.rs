@@ -18,7 +18,7 @@ pub enum AstItem<'ast> {
     Import(AstImport<'ast>),
     Struct(AstStruct<'ast>),
     ExternFunction(AstExternFunction<'ast>),
-    ExternStruct(AstExternStruct<'ast>),
+    ExternStruct(AstStruct<'ast>),
     Function(AstFunction<'ast>),
     Enum(AstEnum<'ast>),
     Union(AstUnion<'ast>),
@@ -258,6 +258,7 @@ pub struct AstStruct<'ast> {
     // Currently only one flag supported: copyable or non-copyable
     pub flag: AstFlag,
     pub docstring: Option<&'ast str>,
+    pub is_extern: bool,
 }
 
 #[derive(Debug, Clone, Default, Copy)]
@@ -393,15 +394,6 @@ pub struct AstObjField<'ast> {
     pub vis: AstVisibility,
     pub docstring: Option<&'ast str>,
     pub default_value: Option<&'ast AstExpr<'ast>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct AstExternStruct<'ast> {
-    pub span: Span,
-    pub name: &'ast AstIdentifier<'ast>,
-    pub vis: AstVisibility,
-    pub fields: &'ast [&'ast AstObjField<'ast>],
-    pub docstring: Option<&'ast str>,
 }
 
 #[derive(Debug, Clone)]

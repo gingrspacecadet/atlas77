@@ -47,8 +47,10 @@ impl CCodeGen {
         }
         for strukt in program.structs.iter() {
             self.codegen_struct(strukt);
-            for s in self.struct_names.iter() {
-                Self::write_to_top(&mut self.c_header, &format!("typedef struct {} {};", s, s));
+            if !strukt.is_extern {
+                for s in self.struct_names.iter() {
+                    Self::write_to_top(&mut self.c_header, &format!("typedef struct {} {};", s, s));
+                }
             }
         }
         for func in program.functions.iter() {
