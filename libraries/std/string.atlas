@@ -30,18 +30,33 @@ private:
     capacity: uint64;
 
 public:
+    //! Creates a new empty `String` with a capacity of 1 (to hold the null terminator)
+    //! but with a len of 0 (since it's empty).
+    String()
+    {
+        this->data = malloc<uint8>(1);
+        this->data[0] = '\0' as uint8;
+        this->len = 0;
+        this->capacity = 1;
+    }
     //! Creates a new `String` by copying the provided string data into its own memory.
     String(str: *uint8, len: uint64)
     {
-        // We take ownership of the string data, so we need to copy it into our own memory.
-        this->data = malloc<uint8>(len);
-        memcpy(this->data, str, len);
-        // We trim the null terminator
-        if this->data[len - 1] == '\0' as uint8 {
-            len = len - 1;
+        if (str == null) {
+            this->data = null;
+            this->len = 0;
+            this->capacity = 0;
+        } else {
+            // We take ownership of the string data, so we need to copy it into our own memory.
+            this->data = malloc<uint8>(len);
+            memcpy(this->data, str, len);
+            // We trim the null terminator
+            if this->data[len - 1] == '\0' as uint8 {
+                len = len - 1;
+            }
+            this->len      = len;
+            this->capacity = len;
         }
-        this->len      = len;
-        this->capacity = len;
     }
     //! Creates a new `String` by copying another `String`.
     String(from: *const String)
@@ -75,10 +90,40 @@ public:
         let len = strlen(str);
         return String(str, len);
     }
+    //! Creates a new `String` with the specified capacity, but with no data.
+    fun with_capacity(capacity: uint64) -> String
+    {
+        let str = String(null, 0);
+        str.data = malloc<uint8>(capacity);
+        str.capacity = capacity;
+        return str;
+    }
     //! Returns the length of the string.
     fun len(*const this) -> uint64
     {
         return this->len;
+    }
+    fun set_len(*this, new_len: uint64)
+    {
+        if new_len > this->capacity {
+            panic("New length exceeds string capacity");
+        }
+        this->len = new_len;
+    }
+    //! Returns a pointer to the string's data. Use with caution, as this can lead to undefined behavior if the string's invariants are violated.
+    fun data(*const this) -> *const uint8
+    {
+        return this->data;
+    }
+    //! Returns a mutable pointer to the string's data. Use with caution, as this can lead to undefined behavior if the string's invariants are violated.
+    fun data_mut(*const this) -> *uint8
+    {
+        return this->data;
+    }
+    //! Returns the capacity of the string.
+    fun capacity(*const this) -> uint64
+    {
+        return this->capacity;
     }
     //! Returns true if the string is empty, false otherwise.
     fun is_empty(*const this) -> bool

@@ -302,4 +302,37 @@ extern inline const uint8_t *atlas77_to_chars_impl(const uint8_t *s)
 /* Reserved section for math runtime hooks. */
 #endif /* ATLAS77_NS_MATH */
 
+#ifndef ATLAS77_NS_IO
+#define ATLAS77_NS_IO
+/* Reserved section for io runtime hooks */
+
+extern inline uint64_t atlas77_input_impl(uint8_t *buf, uint64_t size)
+{
+    uint64_t len;
+    char *raw;
+
+    if (buf == NULL || size == 0)
+    {
+        return 0;
+    }
+
+    raw = (char *)(void *)buf;
+    if (fgets(raw, (int)size, stdin) == NULL)
+    {
+        return 0;
+    }
+
+    len = (uint64_t)strlen(raw);
+
+    /* Trim trailing newline(s) so returned length matches captured content. */
+    while (len > 0 && (raw[len - 1] == '\n' || raw[len - 1] == '\r'))
+    {
+        raw[len - 1] = '\0';
+        len--;
+    }
+
+    return len;
+}
+#endif /* ATLAS77_NS_IO */
+
 #endif /* ATLAS77_USEFUL_HEADER_H */
