@@ -1,0 +1,15 @@
+public extern fun free<T>(val: *T);
+
+public extern fun malloc<T>(size: uint64) -> *T;
+
+public extern fun memcpy<T>(dest: *T, src: *T, size: uint64) -> *T;
+
+public fun move<T: std::moveable>(from: *T) -> T
+{
+    return T::__move_ctor(from);
+}
+
+public fun copy<T: std::copyable>(from: *const T) -> T
+{
+    return T::__copy_ctor(from);
+}

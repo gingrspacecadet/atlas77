@@ -2,174 +2,157 @@
 //!
 //! Provides a String struct with various string manipulation functions.
 
-import "std/vector";
-import "std/iter";
+/* import "std/vector";
+import "std/iter"; */
 
 //! Takes a `&const string` and returns its length as `uint64`.
-public extern fun str_len(s: &const string) -> uint64;
-//! Takes a `string` and returns a new `string` with leading and trailing whitespace removed.
-public extern fun trim(s: &const string) -> string;
-//! Takes a `string` and returns a new `string` converted to uppercase.
-public extern fun to_upper(s: string) -> string;
-//! Takes a `string` and returns a new `string` converted to lowercase.
-public extern fun to_lower(s: string) -> string;
+public extern fun strlen(s: *const uint8) -> uint64;
+//! Takes a single character and returns its uppercase equivalent if it's a lowercase letter, otherwise returns the character unchanged.
+public extern fun toupper(c: uint8) -> uint8;
+//! Takes a single character and returns its lowercase equivalent if it's an uppercase letter, otherwise returns the character unchanged.
+public extern fun tolower(c: uint8) -> uint8;
 //! Takes a `&string` and a `&string` separator, and returns an array of `string` split by the separator.
-public extern fun split(s: &string, sep: &string) -> [string];
+public extern fun atlas77_split_impl(s: *uint8, sep: *uint8) -> [string];
 //! Compares two constant strings lexicographically.
-public extern fun str_cmp(s1: &const string, s2: &const string) -> uint64;
-//! Converts a `&const string` to an array of `char`.
-public extern fun to_chars(s: &const string) -> [char];
-//! Converts an array of `char` to a `string`.
-public extern fun from_chars(s: [char]) -> string;
+public extern fun atlas77_str_cmp_impl(s1: *const uint8, s2: *const uint8) -> uint64;
+//! Converts a `&const string` to an array of `uint8`.
+public extern fun atlas77_to_chars_impl(s: *const uint8) -> [uint8];
 
 
+import "std/memory";
+
+#[std::copyable]
+//! Bootiful String type
 public struct String {
-public:
-    s: string;
+private:
+    data: *uint8;
     len: uint64;
+    capacity: uint64;
 
-    String(s: string) {
-        this.len = str_len(&s);
-        this.s = s;
-    }
-
-    ~String() {
-        delete this.s;
-    }
-
-    String(from: &const String) {
-        this.len = *from.len;
-        this.s = *from.s;
-    }
-
-    fun from_chars(s: [char]) -> String {
-        return new String(from_chars(s));
-    }
-
-    //! Example: String::str_len("Hello") -> 5
-    fun str_len(s: &const string) -> uint64 {
-        return str_len(s);
-    }
-
-    fun len(&this) -> uint64 {
-        return this.len;
-    }
-
-    fun is_empty(&this) -> bool {
-        return this.len == 0u;
-    }
-    //todo: implement as_bytes
-    //fun as_bytes(this) -> [uint8] {}
-    fun concat(&this, other: String) -> String {
-        //I should really implement the <- operator for copying objects
-        let self_chars = to_chars(&this.s);
-        let other_chars = to_chars(&other.s);
-        let res: ptr<char> = malloc<char>(len(&self_chars) + len(&other_chars)); // new [char; len(&self_chars) + len(&other_chars)];
-        let i = 0u;
-        while i < len(&self_chars) {
-            res[i] = self_chars[i];
-            i = i + 1u;
+public:
+    //! Creates a new `String` by copying the provided string data into its own memory.
+    String(str: *uint8, len: uint64)
+    {
+        // We take ownership of the string data, so we need to copy it into our own memory.
+        this->data = malloc<uint8>(len);
+        memcpy(this->data, str, len);
+        // We trim the null terminator
+        if this->data[len - 1] == '\0' as uint8 {
+            len = len - 1;
         }
-        return new String(from_chars(res));
+        this->len      = len;
+        this->capacity = len;
     }
+    //! Creates a new `String` by copying another `String`.
+    String(from: *const String)
+    {
+        this->data = malloc<uint8>(from->capacity);
+        memcpy(this->data, from->data, from->len);
 
-    fun push(&this, c: char) -> unit {
-        //Same... I should implement the <- operator
-        let self_chars = to_chars(&this.s);
-        let res: ptr<char> = malloc<char>(len(&self_chars) + 1u); // new [char; len(&self_chars) + 1u];
-        let i = 0u;
-        while i < len(&self_chars) {
-            res[i] = self_chars[i];
-            i = i + 1u;
+        this->len      = from->len;
+        this->capacity = from->capacity;
+    }
+    String(dying_obj: *String)
+    {
+        this->data = dying_obj->data;
+        this->len = dying_obj->len;
+        this->capacity = dying_obj->capacity;
+
+        // We take ownership of the string data, so we need to null out the dying object's pointer to prevent double free.
+        dying_obj->data = null;
+        dying_obj->len = 0;
+        dying_obj->capacity = 0;
+    }
+    ~String()
+    {
+        if this->data != null {
+            free(this->data);
         }
-        res[i] = c;
-        this.s = from_chars(res);
-        this.len = str_len(&this.s);
-        return;
     }
-
-    fun push_str(&this, s: String) -> unit {
-        let self_chars = to_chars(&this.s);
-        let s_chars = to_chars(&s.s);
-        let res: ptr<char> = malloc<char>(len(&self_chars) + len(&s_chars)); // new [char; len(&self_chars) + len(&s_chars)];
-        let i = 0u;
-        while i < len(&self_chars) {
-            res[i] = self_chars[i];
-            i = i + 1u;
+    //! Creates a new `String` from a null-terminated C string.
+    fun from_chars(str: *uint8) -> String
+    {
+        let len = strlen(str);
+        return String(str, len);
+    }
+    //! Returns the length of the string.
+    fun len(*const this) -> uint64
+    {
+        return this->len;
+    }
+    //! Returns true if the string is empty, false otherwise.
+    fun is_empty(*const this) -> bool
+    {
+        return (this->data == null) || (this->len == 0);
+    }
+    //! Returns a string slice
+    fun to_chars(*const this) -> *const uint8
+    {
+        return this->data;
+    }
+    //! Returns a new `String` with leading and trailing whitespace removed.
+    //! [!Note] NOT TESTED YET - MAY BE BUGGY
+    fun trim(*const this) -> String
+    {
+        let start: uint64 = 0;
+        let end: uint64 = this->len;
+        while start < end && (this->data[start] == ' ' as uint8 || this->data[start] == '\t' as uint8 || this->data[start] == '\n' as uint8) {
+            start = start + 1;
         }
-        let j = 0u;
-        while j < len(&s_chars) {
-            res[i] = s_chars[j];
-            i = i + 1u;
-            j = j + 1u;
+        while end > start && (this->data[end - 1] == ' ' as uint8 || this->data[end - 1] == '\t' as uint8 || this->data[end - 1] == '\n' as uint8) {
+            end = end - 1;
         }
-        this.s = from_chars(res);
-        this.len = str_len(&this.s);
-        return;
+        return String(this->data + start, end - start);
     }
-
-    fun find(&this, sub_string: String) -> uint64 {
-        let res = -1;
-        let i = 0u;
-        let j = 0u;
-        let self_chars = to_chars(&this.s);
-        let sub_chars = to_chars(&sub_string.s);
-        while i < len(&self_chars) && res == -1 {
-            if self_chars[i] == sub_chars[j] {
-                const size_sub_chars: uint64 = len(&sub_chars) - 1u;
-                if j == size_sub_chars {
-                    res = i as int64 - j as int64;
-                }
-                j = j + 1u;
-            } else {
-                j = 0u;
-            }
-            i = i + 1u;
+    //! Returns a new `String` converted to uppercase.
+    //! [!Note] NOT TESTED YET - MAY BE BUGGY
+    fun to_upper(*const this) -> String
+    {
+        let str = copy<String>(this);
+        let i: uint64 = 0;
+        while i < this->len {
+            let c = this->data[i];
+            str.data[i] = toupper(c);
+            i = i + 1;
         }
-        return res as uint64;
+        return str;
     }
-
-    fun get(&this, i: uint64) -> char {
-        return this.s[i];
-    }
-
-    fun set(&this, i: uint64, c: char) -> unit {
-        this.s[i] = c;
-        return;
-    }
-
-    fun to_str(&this) -> string {
-        return this.s;
-    }
-
-    fun to_chars(&this) -> [char] {
-        return to_chars(&this.s);
-    }
-
-    fun to_upper(&this) -> String {
-        return new String(to_upper(this.s));
-    }
-
-    fun to_lower(&this) -> String {
-        return new String(to_lower(this.s));
-    }
-
-    fun trim(&this) -> String {
-        return new String(trim(this.s));
-    }
-
-    fun split(&this, sep: string) -> [String] {
-        let s: [string] = split(&this.s, &sep);
-        let i = 0u;
-        let res: ptr<String> = malloc<String>(len(&s) * size_of(String)); //new [String; len(&s)];
-        while i < len(&s) {
-            res[i] = new String(s[i]);
-            i = i + 1u;
+    //! Returns a new `String` converted to lowercase.
+    //! [!Note] NOT TESTED YET - MAY BE BUGGY
+    fun to_lower(*const this) -> String
+    {
+        let str = copy<String>(this);
+        let i: uint64 = 0;
+        while i < this->len {
+            let c = this->data[i];
+            str.data[i] = tolower(c);
+            i = i + 1;
         }
-        return res;
+        return str;
     }
+    //! Concatenates this string with another string and returns the result as a new `String`.
+    fun concat(*const this, other: *const String) -> String
+    {
+        let new_len: uint64 = this->len + other->len;
+        let new_data: *uint8 = malloc<uint8>(new_len);
+        memcpy(new_data, this->data, this->len);
+        memcpy(new_data + this->len, other->data, other->len);
+        return String(new_data, new_len);
+    }
+}
 
-    fun into_iter(this) -> Iter<char> {
-        return Iter<char>::from_string(this);
-    }
+extern fun printf<T>(fmt: *const uint8, arg: T) -> int64;
+
+fun main()
+{
+    let str: const String = String::from_chars("Hello World");
+    printf("Normal: %s\n", str.to_chars());
+    let str_ptr: *const String = &str;
+    printf("Pointer: %s\n", str_ptr->to_chars());
+
+    let concatenated = str.concat(&str);
+    printf("Concatenated: %s\n", concatenated.to_chars());
+
+    let upper = str.to_upper();
+    printf("Uppercase: %s\n", upper.to_chars());
 }

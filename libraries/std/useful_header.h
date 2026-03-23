@@ -1,88 +1,245 @@
-#ifndef PORTABLE_TIMER_H
-#define PORTABLE_TIMER_H
+#ifndef ATLAS77_USEFUL_HEADER_H
+#define ATLAS77_USEFUL_HEADER_H
+
+#ifndef ATLAS77_NS_INTEGER_TYPES
+#define ATLAS77_NS_INTEGER_TYPES
 
 /* Minimal uint64_t for old compilers */
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #include <stdint.h>
 #else
+#include <limits.h>
+
+/* 64-bits types */
+typedef signed long long int64_t;
 typedef unsigned long long uint64_t;
+
+#define INT64_MAX 9223372036854775807LL
+#define INT64_MIN (-INT64_MAX - 1LL)
+#define UINT64_MAX 18446744073709551615ULL
+
+/* 8-bit */
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+
+/* 16-bit */
+#if INT_MAX == 32767
+typedef signed int int16_t;
+typedef unsigned int uint16_t;
+#else
+typedef signed short int16_t;
+typedef unsigned short uint16_t;
 #endif
+
+/* 32-bit */
+#if INT_MAX == 2147483647L
+typedef signed int int32_t;
+typedef unsigned int uint32_t;
+#else
+typedef signed long int32_t;
+typedef unsigned long uint32_t;
+#endif
+
+#endif
+
+#endif /* ATLAS77_NS_INTEGER_TYPES */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-
-static uint64_t timer_now_ns(void)
-{
-    LARGE_INTEGER freq;
-    LARGE_INTEGER cnt;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&cnt);
-    return (uint64_t)((cnt.QuadPart * 1000000000ULL) / freq.QuadPart);
-}
-
-#else /* POSIX / macOS */
-
-#include <time.h>
-
-#if defined(__MACH__) && !defined(CLOCK_MONOTONIC)
-/* macOS pre-10.12 fallback using mach_absolute_time */
-#include <mach/mach_time.h>
-
-static uint64_t timer_now_ns(void)
-{
-    static mach_timebase_info_data_t tb = {0, 0};
-    if (tb.denom == 0)
-        mach_timebase_info(&tb);
-    uint64_t v = mach_absolute_time();
-    return (v * (uint64_t)tb.numer) / (uint64_t)tb.denom;
-}
-
-#else
-/* POSIX clock_gettime (Linux, modern macOS) */
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
 #endif
-static uint64_t timer_now_ns(void)
+
+#ifndef ATLAS77_NS_TIME
+#define ATLAS77_NS_TIME
+
+typedef struct
 {
+    int64_t sec;
+    int64_t nsec;
+} atlas77_time_layout;
+
+/* Returns the current wall-clock time split into seconds and nanoseconds. */
+static inline atlas77_time_layout atlas77_now_layout(void)
+{
+    atlas77_time_layout t;
+#ifdef _WIN32
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+    GetSystemTimeAsFileTime(&ft);
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+
+    /* FILETIME epoch is 1601-01-01 in 100ns ticks. */
+    {
+        uint64_t unix_ticks = uli.QuadPart - 116444736000000000ULL;
+        uint64_t ns = unix_ticks * 100ULL;
+        t.sec = (int64_t)(ns / 1000000000ULL);
+        t.nsec = (int64_t)(ns % 1000000000ULL);
+    }
+#else
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
-}
-#endif
-
-#endif /* _WIN32 */
-
-static uint64_t timer_elapsed_ns(uint64_t start_ns)
-{
-    return timer_now_ns() - start_ns;
-}
-
-static double timer_elapsed_s(uint64_t start_ns)
-{
-    return (timer_elapsed_ns(start_ns)) / 1e9;
-}
-
-#endif /* PORTABLE_TIMER_H */
-
-#ifndef ATLAS77_USEFUL_HEADER_H
-#define ATLAS77_USEFUL_HEADER_H
-/* Minimal uint64_t for old compilers */
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
-#include <stdint.h>
+#if defined(CLOCK_REALTIME)
+    clock_gettime(CLOCK_REALTIME, &ts);
 #else
-typedef unsigned long long uint64_t;
-typedef unsigned int uint32_t;
-typedef long long int64_t;
-typedef int int32_t;
+    ts.tv_sec = time(NULL);
+    ts.tv_nsec = 0;
 #endif
-// Should this be conditionally included?
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+    t.sec = (int64_t)ts.tv_sec;
+    t.nsec = (int64_t)ts.tv_nsec;
+#endif
+    return t;
+}
+
+/* Returns a stable pointer to a freshly updated time snapshot. */
+static inline const atlas77_time_layout *atlas77_now_layout_ptr(void)
+{
+    static atlas77_time_layout t;
+    t = atlas77_now_layout();
+    return &t;
+}
+
+/* Allocates and copies bytes from a null-terminated C string as uint8 data. */
+static inline uint8_t *atlas77_strdup_u8(const char *s)
+{
+    size_t len;
+    char *out;
+
+    if (s == NULL)
+    {
+        return NULL;
+    }
+
+    len = strlen(s);
+    out = (char *)malloc(len + 1);
+    if (out == NULL)
+    {
+        return NULL;
+    }
+    memcpy(out, s, len + 1);
+    return (uint8_t *)(void *)out;
+}
+
+/* Formats a time value using a strftime format string and returns heap-allocated text. */
+static inline uint8_t *atlas77_format_time_impl(const void *time_raw, const uint8_t *fmt_raw)
+{
+    const atlas77_time_layout *t = (const atlas77_time_layout *)time_raw;
+    const char *fmt = (const char *)(const void *)fmt_raw;
+    time_t sec;
+    struct tm tm_buf;
+    struct tm *tm_ptr;
+    char temp[256];
+    size_t len;
+    char *out;
+
+    if (t == NULL)
+    {
+        return atlas77_strdup_u8("<null-time>");
+    }
+
+    if (fmt == NULL || fmt[0] == '\0')
+    {
+        fmt = "%Y-%m-%d %H:%M:%S";
+    }
+
+    sec = (time_t)t->sec;
+#ifdef _WIN32
+    if (localtime_s(&tm_buf, &sec) != 0)
+    {
+        return atlas77_strdup_u8("<invalid-time>");
+    }
+    tm_ptr = &tm_buf;
+#else
+    tm_ptr = localtime_r(&sec, &tm_buf);
+    if (tm_ptr == NULL)
+    {
+        return atlas77_strdup_u8("<invalid-time>");
+    }
+#endif
+
+    len = strftime(temp, sizeof(temp), fmt, tm_ptr);
+    if (len == 0)
+    {
+        return atlas77_strdup_u8("<format-error>");
+    }
+
+    out = (char *)malloc(len + 1);
+    if (out == NULL)
+    {
+        return NULL;
+    }
+    memcpy(out, temp, len + 1);
+    return (uint8_t *)(void *)out;
+}
+
+/* Formats a time value using an ISO-like default pattern. */
+static inline uint8_t *atlas77_format_time_iso_impl(const void *time_raw)
+{
+    return atlas77_format_time_impl(
+        time_raw,
+        (const uint8_t *)(const void *)"%Y-%m-%dT%H:%M:%S");
+}
+
+/* Suspends execution for the duration represented by the provided time value. */
+static inline void atlas77_sleep_impl(const void *time_raw)
+{
+    const atlas77_time_layout *t = (const atlas77_time_layout *)time_raw;
+    int64_t sec;
+    int64_t nsec;
+
+    if (t == NULL)
+    {
+        return;
+    }
+
+    sec = t->sec;
+    nsec = t->nsec;
+    if (sec < 0)
+    {
+        sec = 0;
+    }
+    if (nsec < 0)
+    {
+        nsec = 0;
+    }
+
+#ifdef _WIN32
+    {
+        uint64_t ms = (uint64_t)sec * 1000ULL + (uint64_t)nsec / 1000000ULL;
+        if (ms > 0xFFFFFFFFULL)
+        {
+            ms = 0xFFFFFFFFULL;
+        }
+        Sleep((DWORD)ms);
+    }
+#else
+    {
+        struct timespec req;
+        req.tv_sec = (time_t)sec;
+        req.tv_nsec = (long)(nsec % 1000000000LL);
+        nanosleep(&req, NULL);
+    }
+#endif
+}
+
+/*
+ * Export a symbol-compatible shim for `extern fun atlas77_now_impl() -> Time`
+ * without introducing global libc-name collisions.
+ */
+#define atlas77_now_impl() (*(Time *)(void *)atlas77_now_layout_ptr())
+
+#endif /* ATLAS77_NS_TIME */
+
+#ifndef ATLAS77_NS_MEMORY
+#define ATLAS77_NS_MEMORY
 
 // TODO: Once size_of<T> is implemented in Atlas77, we can make this more general
 // because we will know the size at compile time.
+/* Swaps two 64-bit values in place. */
 static inline void __atlas77_c_swap(void *a, void *b)
 {
     uint64_t temp = *(uint64_t *)a;
@@ -90,66 +247,59 @@ static inline void __atlas77_c_swap(void *a, void *b)
     *(uint64_t *)b = temp;
 }
 
+/* Aborts the process after printing a panic message. */
 static inline void panic(const char *message)
 {
     fprintf(stderr, "PANIC: %s\n", message);
     exit(1);
 }
 
-typedef struct
-{
-    uint64_t len;
-    char *data;
-} string;
+#endif /* ATLAS77_NS_MEMORY */
 
-const uint64_t string_size = sizeof(string);
+#ifndef ATLAS77_NS_STRING
+#define ATLAS77_NS_STRING
 
-extern inline uint64_t __atlas77_c_str_len(const string str)
-{
-    return str.len;
-}
+#include <ctype.h>
 
-extern inline string __atlas77_c_trim(const string str)
+/* Placeholder for split implementation; currently returns an unspecified value. */
+extern inline uint8_t *__atlas77_c_split(uint8_t *str, const uint8_t *separator)
 {
 }
 
-extern inline string __atlas77_c_to_upper(const string str)
+/* Lexicographically compares two Atlas77 string buffers like strcmp. */
+extern inline uint64_t __atlas77_c_str_cmp(const uint8_t *str_1, const uint8_t *str2)
 {
-}
-
-extern inline string __atlas77_c_to_lower(const string str)
-{
-}
-
-extern inline string __atlas77_c_split(string str, const string separator)
-{
-}
-
-extern inline uint64_t __atlas77_c_str_cmp(const string str_1, const string str2)
-{
-    return strcmp(str_1.data, str2.data);
+    return strcmp((const char *)str_1, (const char *)str2);
 }
 
 /* NB: Returns a null terminated string */
-extern inline const char *__atlas77_c_to_chars(const string s)
+extern inline const uint8_t *atlas77_to_chars_impl(const uint8_t *s)
 {
-    // Later to_chars() will return a slice e.g. `[char]`
+    // Later to_chars() will return a slice e.g. `[uint8]`
     // And the string type will be a bit more defined
-    return s.data;
+    return (const uint8_t *)s;
 }
 
-/* NB: This is an array of char with a null terminated string for now */
-extern inline string __atlas77_c_from_chars(const char *chars)
-{
-    uint64_t length = strlen(chars);
-    char *my_str = (char *)malloc((length + 1) * sizeof(char));
-    strcpy(my_str, chars);
+#endif /* ATLAS77_NS_STRING */
 
-    string my_string;
-    my_string.len = length;
-    my_string.data = my_str;
+#ifndef ATLAS77_NS_VECTOR
+#define ATLAS77_NS_VECTOR
+/* Reserved section for vector runtime hooks. */
+#endif /* ATLAS77_NS_VECTOR */
 
-    return my_string;
-}
+#ifndef ATLAS77_NS_OPTIONAL
+#define ATLAS77_NS_OPTIONAL
+/* Reserved section for optional runtime hooks. */
+#endif /* ATLAS77_NS_OPTIONAL */
+
+#ifndef ATLAS77_NS_EXPECTED
+#define ATLAS77_NS_EXPECTED
+/* Reserved section for expected runtime hooks. */
+#endif /* ATLAS77_NS_EXPECTED */
+
+#ifndef ATLAS77_NS_MATH
+#define ATLAS77_NS_MATH
+/* Reserved section for math runtime hooks. */
+#endif /* ATLAS77_NS_MATH */
 
 #endif /* ATLAS77_USEFUL_HEADER_H */
