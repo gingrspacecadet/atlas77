@@ -89,6 +89,7 @@ declare_error_type! {
         ListIndexOutOfBounds(ListIndexOutOfBoundsError),
         IncorrectIntrinsicCallArguments(IncorrectIntrinsicCallArgumentsError),
         CannotAccessFieldOfPointers(CannotAccessFieldOfPointersError),
+        ReservedVariableName(ReservedVariableNameError),
     }
 }
 
@@ -124,6 +125,17 @@ impl HirError {
             _ => HirErrorGravity::Critical,
         }
     }
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(code(sema::reserved_variable_name), help("Try renaming your variable"))]
+#[error("This kind of variable as a special behaviour, please rename it")]
+pub struct ReservedVariableNameError {
+    #[label = "{name} is a reserved name for variable"]
+    pub span: Span,
+    #[source_code]
+    pub src: NamedSource<String>,
+    pub name: String,
 }
 
 #[derive(Error, Diagnostic, Debug)]

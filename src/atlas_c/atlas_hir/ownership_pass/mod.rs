@@ -19,8 +19,8 @@ use crate::atlas_c::atlas_hir::error::{
     TypeIsNotMoveableError,
 };
 use crate::atlas_c::atlas_hir::expr::{
-    HirCopyExpr, HirDeleteExpr, HirExpr, HirFieldAccessExpr, HirFunctionCallExpr, HirIdentExpr,
-    HirUnaryOp,
+    HirCopyExpr, HirDeleteExpr, HirExpr, HirFieldAccessExpr, HirFunctionCallExpr, HirFunctionKind,
+    HirIdentExpr, HirUnaryOp,
 };
 use crate::atlas_c::atlas_hir::item::{HirStruct, HirStructConstructor, HirStructMethod};
 use crate::atlas_c::atlas_hir::signature::HirModuleSignature;
@@ -73,6 +73,7 @@ struct VarInfo<'hir> {
 #[derive(Debug, Clone, Default)]
 struct ScopeState<'hir> {
     vars: HashMap<&'hir str, VarInfo<'hir>>,
+    decl_order: Vec<&'hir str>,
 }
 
 pub struct OwnershipPass<'hir> {
@@ -81,7 +82,6 @@ pub struct OwnershipPass<'hir> {
     scopes: Vec<ScopeState<'hir>>,
     warnings: Vec<ErrReport>,
     emitted_ctor_warning: bool,
-    return_context_depth: usize,
 }
 
 impl<'hir> OwnershipPass<'hir> {
@@ -92,7 +92,6 @@ impl<'hir> OwnershipPass<'hir> {
             scopes: Vec::new(),
             warnings: Vec::new(),
             emitted_ctor_warning: false,
-            return_context_depth: 0,
         }
     }
 
@@ -136,7 +135,7 @@ impl<'hir> OwnershipPass<'hir> {
 
     fn declare_var(&mut self, name: &'hir str, ty: &'hir HirTy<'hir>, is_param: bool) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.vars.insert(
+            let inserted = scope.vars.insert(
                 name,
                 VarInfo {
                     name,
@@ -145,6 +144,9 @@ impl<'hir> OwnershipPass<'hir> {
                     is_param,
                 },
             );
+            if inserted.is_none() {
+                scope.decl_order.push(name);
+            }
         }
     }
 
@@ -203,16 +205,15 @@ impl<'hir> OwnershipPass<'hir> {
         }
     }
 
-    fn in_return_context(&self) -> bool {
-        self.return_context_depth > 0
-    }
-
     fn is_trivial(&self, ty: &HirTy<'hir>) -> bool {
         matches!(
             ty,
             HirTy::Integer(_)
+                | HirTy::LiteralInteger(_)
                 | HirTy::Float(_)
+                | HirTy::LiteralFloat(_)
                 | HirTy::UnsignedInteger(_)
+                | HirTy::LiteralUnsignedInteger(_)
                 | HirTy::Boolean(_)
                 | HirTy::Unit(_)
                 | HirTy::Char(_)
@@ -345,6 +346,14 @@ impl<'hir> OwnershipPass<'hir> {
         for mut stmt in old_statements {
             self.analyze_statement(&mut stmt)?;
 
+            if let HirStatement::Assign(assign_stmt) = &stmt {
+                if let Some((name, delete_stmt)) = self.reassignment_delete_stmt(assign_stmt) {
+                    new_statements.push(delete_stmt);
+                    self.mark_deleted(name, assign_stmt.span);
+                }
+                self.mark_assigned_lvalue_valid(&assign_stmt.dst);
+            }
+
             if matches!(stmt, HirStatement::Return(_)) {
                 let mut deletes = self.build_scope_auto_deletes(stmt.span());
                 new_statements.append(&mut deletes);
@@ -366,26 +375,42 @@ impl<'hir> OwnershipPass<'hir> {
         match stmt {
             HirStatement::Let(let_stmt) => {
                 self.analyze_expr(&mut let_stmt.value)?;
-                self.copy_by_default(&mut let_stmt.value, let_stmt.ty, let_stmt.span)?;
+                if !self.transfer_if_synthetic_temporary(
+                    &let_stmt.value,
+                    let_stmt.ty,
+                    let_stmt.span,
+                ) {
+                    self.copy_by_default(&mut let_stmt.value, let_stmt.ty, let_stmt.span)?;
+                }
                 self.declare_var(let_stmt.name, let_stmt.ty, false);
             }
             HirStatement::Const(const_stmt) => {
                 self.analyze_expr(&mut const_stmt.value)?;
-                self.copy_by_default(&mut const_stmt.value, const_stmt.ty, const_stmt.span)?;
+                if !self.transfer_if_synthetic_temporary(
+                    &const_stmt.value,
+                    const_stmt.ty,
+                    const_stmt.span,
+                ) {
+                    self.copy_by_default(&mut const_stmt.value, const_stmt.ty, const_stmt.span)?;
+                }
                 self.declare_var(const_stmt.name, const_stmt.ty, false);
             }
             HirStatement::Assign(assign_stmt) => {
                 self.analyze_expr(&mut assign_stmt.dst)?;
                 self.analyze_expr(&mut assign_stmt.val)?;
-                self.copy_by_default(&mut assign_stmt.val, assign_stmt.ty, assign_stmt.span)?;
+                if !self.transfer_if_synthetic_temporary(
+                    &assign_stmt.val,
+                    assign_stmt.ty,
+                    assign_stmt.span,
+                ) {
+                    self.copy_by_default(&mut assign_stmt.val, assign_stmt.ty, assign_stmt.span)?;
+                }
             }
             HirStatement::Expr(expr_stmt) => {
                 self.analyze_expr(&mut expr_stmt.expr)?;
             }
             HirStatement::Return(ret_stmt) => {
-                self.return_context_depth += 1;
                 self.analyze_expr(&mut ret_stmt.value)?;
-                self.return_context_depth = self.return_context_depth.saturating_sub(1);
                 self.mark_return_expression_transfer(&ret_stmt.value, ret_stmt.span);
             }
             HirStatement::IfElse(if_stmt) => {
@@ -596,11 +621,9 @@ impl<'hir> OwnershipPass<'hir> {
         for idx in 0..call.args.len() {
             let param_ty = call.args_ty.get(idx).copied();
             let is_mut_ptr_param = matches!(param_ty, Some(HirTy::PtrTy(p)) if !p.is_const);
-            let is_by_value_param = matches!(param_ty, Some(ty) if !matches!(ty, HirTy::PtrTy(_)));
 
-            let should_move = move_reason.is_some()
-                || is_mut_ptr_param
-                || (self.in_return_context() && is_by_value_param);
+            // By-value arguments are copy-by-default. No implicit transfer/move.
+            let should_move = move_reason.is_some() || is_mut_ptr_param;
 
             if should_move {
                 self.ensure_not_moving_from_const_ptr(&call.args[idx])?;
@@ -628,13 +651,61 @@ impl<'hir> OwnershipPass<'hir> {
             }
 
             if !matches!(param_ty, Some(HirTy::PtrTy(_))) {
-                let fallback_ty = call.args[idx].ty();
                 let arg_span = call.args[idx].span();
+                self.ensure_by_value_arg_copyable_or_explicit_move(&call.args[idx], arg_span)?;
+                let fallback_ty = call.args[idx].ty();
                 self.copy_by_default(&mut call.args[idx], fallback_ty, arg_span)?;
             }
         }
 
         Ok(())
+    }
+
+    fn ensure_by_value_arg_copyable_or_explicit_move(
+        &self,
+        expr: &HirExpr<'hir>,
+        span: Span,
+    ) -> HirResult<()> {
+        let expr = self.strip_noop_unary(expr);
+
+        if matches!(expr, HirExpr::Copy(_)) || self.is_explicit_move_expr(expr) {
+            return Ok(());
+        }
+
+        let source_ty = expr.ty();
+        if self.is_trivial(source_ty) || self.is_copyable(source_ty) {
+            return Ok(());
+        }
+
+        let path = span.path;
+        let src = utils::get_file_content(path).unwrap();
+        Err(HirError::TypeIsNotCopyable(TypeIsNotCopyableError {
+            span,
+            type_name: format!("{}", source_ty),
+            src: NamedSource::new(path, src),
+        }))
+    }
+
+    fn transfer_if_synthetic_temporary(
+        &mut self,
+        expr: &HirExpr<'hir>,
+        expected_ty: &'hir HirTy<'hir>,
+        span: Span,
+    ) -> bool {
+        if self.is_trivial(expected_ty) {
+            return false;
+        }
+
+        let expr = self.strip_noop_unary(expr);
+        if let HirExpr::Ident(ident) = expr
+            && ident.name.starts_with("__tmp")
+        {
+            // Treat synthetic temporaries as ownership transfer points.
+            self.mark_moved(ident.name, span, MoveReason::ReturnedValueTransfer);
+            return true;
+        }
+
+        false
     }
 
     fn ensure_not_moving_from_const_ptr(&self, expr: &HirExpr<'hir>) -> HirResult<()> {
@@ -776,6 +847,114 @@ impl<'hir> OwnershipPass<'hir> {
         expr
     }
 
+    fn reassignment_delete_stmt(
+        &self,
+        assign_stmt: &crate::atlas_c::atlas_hir::stmt::HirAssignStmt<'hir>,
+    ) -> Option<(&'hir str, HirStatement<'hir>)> {
+        let name = self.extract_assigned_ident(&assign_stmt.dst)?;
+
+        // Assignment lowering evaluates RHS in the assignment statement itself,
+        // so only pre-delete when RHS does not read from the destination.
+        if self.expr_contains_ident(&assign_stmt.val, name) {
+            return None;
+        }
+
+        let var = self.get_var(name)?;
+        if !self.should_auto_delete_type(var.ty) {
+            return None;
+        }
+
+        if !matches!(var.state, VarState::Valid) {
+            return None;
+        }
+
+        let ident = HirExpr::Ident(HirIdentExpr {
+            name,
+            span: assign_stmt.span,
+            ty: var.ty,
+        });
+
+        Some((
+            name,
+            HirStatement::Expr(HirExprStmt {
+                span: assign_stmt.span,
+                expr: HirExpr::Delete(HirDeleteExpr {
+                    span: assign_stmt.span,
+                    expr: Box::new(ident),
+                }),
+            }),
+        ))
+    }
+
+    fn mark_assigned_lvalue_valid(&mut self, dst: &HirExpr<'hir>) {
+        if let Some(name) = self.extract_assigned_ident(dst)
+            && let Some(var) = self.get_var_mut(name)
+        {
+            var.state = VarState::Valid;
+        }
+    }
+
+    fn extract_assigned_ident(&self, dst: &HirExpr<'hir>) -> Option<&'hir str> {
+        let dst = self.strip_noop_unary(dst);
+        if let HirExpr::Ident(ident) = dst {
+            Some(ident.name)
+        } else {
+            None
+        }
+    }
+
+    fn expr_contains_ident(&self, expr: &HirExpr<'hir>, name: &'hir str) -> bool {
+        match expr {
+            HirExpr::Ident(ident) => ident.name == name,
+            HirExpr::HirBinaryOperation(bin) => {
+                self.expr_contains_ident(&bin.lhs, name) || self.expr_contains_ident(&bin.rhs, name)
+            }
+            HirExpr::Unary(unary) => self.expr_contains_ident(&unary.expr, name),
+            HirExpr::Call(call) => {
+                self.expr_contains_ident(&call.callee, name)
+                    || call
+                        .args
+                        .iter()
+                        .any(|arg| self.expr_contains_ident(arg, name))
+            }
+            HirExpr::FieldAccess(field) => self.expr_contains_ident(&field.target, name),
+            HirExpr::Indexing(idx) => {
+                self.expr_contains_ident(&idx.target, name)
+                    || self.expr_contains_ident(&idx.index, name)
+            }
+            HirExpr::Casting(cast) => self.expr_contains_ident(&cast.expr, name),
+            HirExpr::ListLiteral(list) => list
+                .items
+                .iter()
+                .any(|item| self.expr_contains_ident(item, name)),
+            HirExpr::NewArray(arr) => self.expr_contains_ident(&arr.size, name),
+            HirExpr::NewObj(new_obj) => new_obj
+                .args
+                .iter()
+                .any(|arg| self.expr_contains_ident(arg, name)),
+            HirExpr::ObjLiteral(obj) => obj
+                .fields
+                .iter()
+                .any(|field| self.expr_contains_ident(&field.value, name)),
+            HirExpr::Delete(del) => self.expr_contains_ident(&del.expr, name),
+            HirExpr::Copy(copy) => self.expr_contains_ident(&copy.expr, name),
+            HirExpr::IntrinsicCall(intr) => intr
+                .args
+                .iter()
+                .any(|arg| self.expr_contains_ident(arg, name)),
+            HirExpr::IntegerLiteral(_)
+            | HirExpr::FloatLiteral(_)
+            | HirExpr::UnsignedIntegerLiteral(_)
+            | HirExpr::BooleanLiteral(_)
+            | HirExpr::UnitLiteral(_)
+            | HirExpr::CharLiteral(_)
+            | HirExpr::StringLiteral(_)
+            | HirExpr::NullLiteral(_)
+            | HirExpr::ThisLiteral(_)
+            | HirExpr::StaticAccess(_) => false,
+        }
+    }
+
     fn mark_return_expression_transfer(&mut self, expr: &HirExpr<'hir>, span: Span) {
         let expr = self.strip_noop_unary(expr);
 
@@ -790,6 +969,79 @@ impl<'hir> OwnershipPass<'hir> {
                     self.mark_field_moved(base.name, field_access.field.name, span);
                 }
             }
+            HirExpr::ObjLiteral(obj_lit) => {
+                for field in &obj_lit.fields {
+                    self.mark_linked_return_transfer(&field.value, span);
+                }
+            }
+            HirExpr::NewObj(new_obj) => {
+                for arg in &new_obj.args {
+                    self.mark_linked_return_transfer(arg, span);
+                }
+            }
+            HirExpr::Call(call)
+                if matches!(
+                    call.kind,
+                    HirFunctionKind::Constructor
+                        | HirFunctionKind::DefaultConstructor
+                        | HirFunctionKind::MoveConstructor
+                ) =>
+            {
+                for arg in &call.args {
+                    self.mark_linked_return_transfer(arg, span);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn mark_linked_return_transfer(&mut self, expr: &HirExpr<'hir>, span: Span) {
+        let expr = self.strip_noop_unary(expr);
+
+        if matches!(expr, HirExpr::Copy(_)) {
+            return;
+        }
+
+        match expr {
+            HirExpr::Ident(ident) => {
+                self.mark_moved(ident.name, span, MoveReason::ReturnedValueTransfer)
+            }
+            HirExpr::FieldAccess(field_access) => {
+                if let HirExpr::Ident(base) = self.strip_noop_unary(&field_access.target) {
+                    self.mark_field_moved(base.name, field_access.field.name, span);
+                } else {
+                    self.mark_linked_return_transfer(&field_access.target, span);
+                }
+            }
+            HirExpr::ObjLiteral(obj_lit) => {
+                for field in &obj_lit.fields {
+                    self.mark_linked_return_transfer(&field.value, span);
+                }
+            }
+            HirExpr::NewObj(new_obj) => {
+                for arg in &new_obj.args {
+                    self.mark_linked_return_transfer(arg, span);
+                }
+            }
+            HirExpr::Call(call)
+                if matches!(
+                    call.kind,
+                    HirFunctionKind::Constructor
+                        | HirFunctionKind::DefaultConstructor
+                        | HirFunctionKind::MoveConstructor
+                ) =>
+            {
+                for arg in &call.args {
+                    self.mark_linked_return_transfer(arg, span);
+                }
+            }
+            HirExpr::ListLiteral(list) => {
+                for item in &list.items {
+                    self.mark_linked_return_transfer(item, span);
+                }
+            }
+            HirExpr::Casting(cast) => self.mark_linked_return_transfer(&cast.expr, span),
+            HirExpr::Unary(unary) => self.mark_linked_return_transfer(&unary.expr, span),
             _ => {}
         }
     }
@@ -799,7 +1051,10 @@ impl<'hir> OwnershipPass<'hir> {
         let mut names_to_delete: Vec<&'hir str> = Vec::new();
 
         if let Some(scope) = self.scopes.last() {
-            for var in scope.vars.values() {
+            for name in scope.decl_order.iter().rev() {
+                let Some(var) = scope.vars.get(name) else {
+                    continue;
+                };
                 if var.is_param {
                     continue;
                 }
@@ -808,7 +1063,10 @@ impl<'hir> OwnershipPass<'hir> {
                 }
                 if matches!(
                     var.state,
-                    VarState::Deleted { .. } | VarState::Returned { .. }
+                    VarState::Deleted { .. }
+                        | VarState::Returned { .. }
+                        | VarState::Moved { .. }
+                        | VarState::ConditionallyMoved { .. }
                 ) {
                     continue;
                 }

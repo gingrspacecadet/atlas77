@@ -24,9 +24,9 @@ use crate::atlas_c::{
             AssignmentCannotBeAnExpressionError, CannotGenerateADestructorForThisTypeError,
             ConstructorCannotHaveAWhereClauseError, HirError, HirResult,
             IncorrectIntrinsicCallArgumentsError, NonConstantValueError,
-            NullableTypeRequiresStdLibraryError, StructNameCannotBeOneLetterError,
-            UnknownFileImportError, UnknownTypeError, UnsupportedExpr, UnsupportedItemError,
-            UselessError,
+            NullableTypeRequiresStdLibraryError, ReservedVariableNameError,
+            StructNameCannotBeOneLetterError, UnknownFileImportError, UnknownTypeError,
+            UnsupportedExpr, UnsupportedItemError, UselessError,
         },
         expr::{
             HirBinaryOpExpr, HirBinaryOperator, HirBooleanLiteralExpr, HirCastExpr,
@@ -76,6 +76,7 @@ pub struct AstSyntaxLoweringPass<'ast, 'hir> {
     /// Keep track of already imported modules to avoid duplicate imports
     pub already_imported: BTreeMap<&'hir str, ()>,
     pub using_std: bool,
+    temp_counter: usize,
 }
 
 impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
@@ -95,6 +96,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             warnings: Vec::new(),
             already_imported: BTreeMap::new(),
             using_std,
+            temp_counter: 0,
         }
     }
 }
@@ -123,9 +125,19 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
     }
     pub fn visit_item(&mut self, ast_item: &'ast AstItem<'ast>) -> HirResult<()> {
         match ast_item {
-            AstItem::Constant(_) => {
+            AstItem::Constant(c) => {
                 let path = ast_item.span().path;
                 let src = utils::get_file_content(path).unwrap();
+                if c.name.name.starts_with("__tmp") {
+                    eprintln!(
+                        "{:?}",
+                        Into::<miette::ErrReport>::into(ReservedVariableNameError {
+                            name: String::from("__tmp"),
+                            src: NamedSource::new(path, src.clone()),
+                            span: c.name.span
+                        })
+                    )
+                }
                 return Err(HirError::UnsupportedItem(UnsupportedItemError {
                     span: ast_item.span(),
                     item: "Global constants".to_string(),
@@ -1125,18 +1137,18 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
     }
 
     fn visit_block(&mut self, node: &'ast AstBlock<'ast>) -> HirResult<HirBlock<'hir>> {
-        let statements = node
-            .stmts
-            .iter()
-            .map(|stmt| self.visit_stmt(stmt))
-            .collect::<HirResult<Vec<_>>>()?;
+        let mut statements = Vec::new();
+        for stmt in node.stmts.iter() {
+            let mut lowered = self.visit_stmt(stmt)?;
+            statements.append(&mut lowered);
+        }
         Ok(HirBlock {
             statements,
             span: node.span,
         })
     }
 
-    fn visit_stmt(&mut self, node: &'ast AstStatement<'ast>) -> HirResult<HirStatement<'hir>> {
+    fn visit_stmt(&mut self, node: &'ast AstStatement<'ast>) -> HirResult<Vec<HirStatement<'hir>>> {
         match node {
             AstStatement::While(ast_while) => {
                 let condition = self.visit_expr(ast_while.condition)?;
@@ -1146,12 +1158,12 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     condition,
                     body,
                 });
-                Ok(hir)
+                Ok(vec![hir])
             }
             AstStatement::Block(ast_block) => {
                 let block = self.visit_block(ast_block)?;
                 let hir = HirStatement::Block(block);
-                Ok(hir)
+                Ok(vec![hir])
             }
             AstStatement::Const(ast_const) => {
                 let name = self.arena.names().get(ast_const.name.name);
@@ -1164,9 +1176,19 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                         &name.to_snake_case(),
                     );
                 }
+                if name.starts_with("__tmp") {
+                    let path = ast_const.span.path;
+                    let src = crate::atlas_c::utils::get_file_content(path).unwrap();
+                    return Err(HirError::ReservedVariableName(ReservedVariableNameError {
+                        name: String::from("__tmp"),
+                        src: NamedSource::new(path, src.clone()),
+                        span: ast_const.name.span,
+                    }));
+                }
                 let ty = self.visit_ty(ast_const.ty)?;
 
                 let value = self.visit_expr(ast_const.value)?;
+                let (mut temps, value) = self.separate_temporaries(value, true);
                 let hir = HirStatement::Const(HirVariableStmt {
                     span: node.span(),
                     name,
@@ -1175,10 +1197,20 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     ty_span: Some(ast_const.ty.span()),
                     value,
                 });
-                Ok(hir)
+                temps.push(hir);
+                Ok(temps)
             }
             AstStatement::Let(ast_let) => {
                 let name = self.arena.names().get(ast_let.name.name);
+                if name.starts_with("__tmp") {
+                    let path = ast_let.span.path;
+                    let src = crate::atlas_c::utils::get_file_content(path).unwrap();
+                    return Err(HirError::ReservedVariableName(ReservedVariableNameError {
+                        name: String::from("__tmp"),
+                        src: NamedSource::new(path, src.clone()),
+                        span: ast_let.name.span,
+                    }));
+                }
                 if !name.is_snake_case() {
                     Self::name_should_be_in_different_case_warning(
                         &ast_let.span,
@@ -1191,6 +1223,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 let ty = ast_let.ty.map(|ty| self.visit_ty(ty)).transpose()?;
 
                 let value = self.visit_expr(ast_let.value)?;
+                let (mut temps, value) = self.separate_temporaries(value, true);
                 let hir = HirStatement::Let(HirVariableStmt {
                     span: node.span(),
                     name,
@@ -1200,21 +1233,27 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     ty_span: ty.map(|_| ast_let.ty.unwrap().span()),
                     value,
                 });
-                Ok(hir)
+                temps.push(hir);
+                Ok(temps)
             }
             AstStatement::Assign(assign) => {
                 let target = self.visit_expr(assign.target)?;
                 let value = self.visit_expr(assign.value)?;
+                let (mut dst_temps, target) = self.separate_temporaries(target, true);
+                let (mut val_temps, value) = self.separate_temporaries(value, true);
                 let hir = HirStatement::Assign(HirAssignStmt {
                     span: node.span(),
                     dst: target,
                     val: value,
                     ty: self.arena.types().get_uninitialized_ty(),
                 });
-                Ok(hir)
+                dst_temps.append(&mut val_temps);
+                dst_temps.push(hir);
+                Ok(dst_temps)
             }
             AstStatement::IfElse(ast_if_else) => {
                 let condition = self.visit_expr(ast_if_else.condition)?;
+                let (mut cond_temps, condition) = self.separate_temporaries(condition, true);
                 let then_branch = self.visit_block(ast_if_else.body)?;
                 //If you don't type, the compiler will use it as an "Option<&mut HirBlock<'hir>>"
                 //Which is dumb asf
@@ -1228,25 +1267,30 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     then_branch,
                     else_branch,
                 });
-                Ok(hir)
+                cond_temps.push(hir);
+                Ok(cond_temps)
             }
             //The parser really need a bit of work
             AstStatement::Return(ast_return) => {
                 let expr = self.visit_expr(ast_return.value)?;
+                let (mut temps, expr) = self.separate_temporaries(expr, true);
                 let hir = HirStatement::Return(HirReturn {
                     span: node.span(),
                     ty: expr.ty(),
                     value: expr,
                 });
-                Ok(hir)
+                temps.push(hir);
+                Ok(temps)
             }
             AstStatement::Expr(ast_expr) => {
                 let expr = self.visit_expr(ast_expr)?;
+                let (mut temps, expr) = self.separate_temporaries(expr, true);
                 let hir = HirStatement::Expr(HirExprStmt {
                     span: node.span(),
                     expr,
                 });
-                Ok(hir)
+                temps.push(hir);
+                Ok(temps)
             } /*
               _ => {
                   let path = node.span().path;
@@ -1258,6 +1302,208 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                   }))
               }
               */
+        }
+    }
+
+    fn should_hoist_temporary_expr(&self, expr: &HirExpr<'hir>) -> bool {
+        matches!(expr, HirExpr::Call(_) | HirExpr::NewObj(_))
+    }
+
+    fn find_function_signature_in_module(
+        &self,
+        module_sig: &HirModuleSignature<'hir>,
+        name: &str,
+    ) -> Option<&'hir HirFunctionSignature<'hir>> {
+        if let Some(sig) = module_sig.functions.get(name) {
+            return Some(*sig);
+        }
+
+        for imported in module_sig.imported_modules.values() {
+            if let Some(sig) = self.find_function_signature_in_module(imported, name) {
+                return Some(sig);
+            }
+        }
+
+        None
+    }
+
+    fn call_returns_unit(&self, call: &HirFunctionCallExpr<'hir>) -> bool {
+        if call.ty.is_unit() {
+            return true;
+        }
+
+        match call.callee.as_ref() {
+            HirExpr::Ident(ident) => self
+                .find_function_signature_in_module(&self.module_signature, ident.name)
+                .is_some_and(|sig| sig.return_ty.is_unit()),
+            _ => false,
+        }
+    }
+
+    fn fresh_temp_name(&mut self) -> &'hir str {
+        let name = format!("__tmp{}", self.temp_counter);
+        self.temp_counter += 1;
+        self.arena.names().get(&name)
+    }
+
+    fn hoist_expr_into_temp(&mut self, expr: HirExpr<'hir>) -> (HirStatement<'hir>, HirExpr<'hir>) {
+        let span = expr.span();
+        let name = self.fresh_temp_name();
+        let uninit = self.arena.types().get_uninitialized_ty();
+
+        let stmt = HirStatement::Let(HirVariableStmt {
+            span,
+            name,
+            name_span: span,
+            ty: uninit,
+            ty_span: None,
+            value: expr,
+        });
+
+        let ident = HirExpr::Ident(HirIdentExpr {
+            name,
+            span,
+            ty: uninit,
+        });
+
+        (stmt, ident)
+    }
+
+    fn separate_temporaries(
+        &mut self,
+        expr: HirExpr<'hir>,
+        is_root: bool,
+    ) -> (Vec<HirStatement<'hir>>, HirExpr<'hir>) {
+        match expr {
+            HirExpr::HirBinaryOperation(mut b) => {
+                let (mut lhs_temps, lhs) = self.separate_temporaries(*b.lhs, false);
+                let (mut rhs_temps, rhs) = self.separate_temporaries(*b.rhs, false);
+                b.lhs = Box::new(lhs);
+                b.rhs = Box::new(rhs);
+                let rebuilt = HirExpr::HirBinaryOperation(b);
+                lhs_temps.append(&mut rhs_temps);
+                if !is_root && self.should_hoist_temporary_expr(&rebuilt) {
+                    let (stmt, ident) = self.hoist_expr_into_temp(rebuilt);
+                    lhs_temps.push(stmt);
+                    (lhs_temps, ident)
+                } else {
+                    (lhs_temps, rebuilt)
+                }
+            }
+            HirExpr::Call(mut c) => {
+                let (mut callee_temps, callee) = self.separate_temporaries(*c.callee, false);
+                c.callee = Box::new(callee);
+
+                let mut new_args = Vec::with_capacity(c.args.len());
+                for arg in c.args {
+                    let (mut arg_temps, new_arg) = self.separate_temporaries(arg, false);
+                    callee_temps.append(&mut arg_temps);
+                    new_args.push(new_arg);
+                }
+                c.args = new_args;
+
+                let rebuilt = HirExpr::Call(c);
+                if !is_root
+                    && self.should_hoist_temporary_expr(&rebuilt)
+                    && !matches!(&rebuilt, HirExpr::Call(call) if self.call_returns_unit(call))
+                {
+                    let (stmt, ident) = self.hoist_expr_into_temp(rebuilt);
+                    callee_temps.push(stmt);
+                    (callee_temps, ident)
+                } else {
+                    (callee_temps, rebuilt)
+                }
+            }
+            HirExpr::Unary(mut u) => {
+                // Preserve root context for parser-introduced no-op unary wrappers.
+                // Otherwise a root call statement like `panic(...)` can be treated as
+                // non-root and incorrectly hoisted into `let __tmp: unit = ...`.
+                let child_is_root = is_root && u.op.is_none();
+                let (temps, inner) = self.separate_temporaries(*u.expr, child_is_root);
+                u.expr = Box::new(inner);
+                (temps, HirExpr::Unary(u))
+            }
+            HirExpr::Casting(mut c) => {
+                let (temps, inner) = self.separate_temporaries(*c.expr, false);
+                c.expr = Box::new(inner);
+                (temps, HirExpr::Casting(c))
+            }
+            HirExpr::Indexing(mut i) => {
+                let (mut target_temps, target) = self.separate_temporaries(*i.target, false);
+                let (mut index_temps, index) = self.separate_temporaries(*i.index, false);
+                i.target = Box::new(target);
+                i.index = Box::new(index);
+                target_temps.append(&mut index_temps);
+                (target_temps, HirExpr::Indexing(i))
+            }
+            HirExpr::Delete(mut d) => {
+                let (temps, inner) = self.separate_temporaries(*d.expr, false);
+                d.expr = Box::new(inner);
+                (temps, HirExpr::Delete(d))
+            }
+            HirExpr::FieldAccess(mut f) => {
+                let (temps, target) = self.separate_temporaries(*f.target, false);
+                f.target = Box::new(target);
+                (temps, HirExpr::FieldAccess(f))
+            }
+            HirExpr::ObjLiteral(mut o) => {
+                let mut temps = Vec::new();
+                for field in o.fields.iter_mut() {
+                    let (mut field_temps, value) =
+                        self.separate_temporaries(*field.value.clone(), false);
+                    field.value = Box::new(value);
+                    temps.append(&mut field_temps);
+                }
+                let rebuilt = HirExpr::ObjLiteral(o);
+                if !is_root && self.should_hoist_temporary_expr(&rebuilt) {
+                    let (stmt, ident) = self.hoist_expr_into_temp(rebuilt);
+                    temps.push(stmt);
+                    (temps, ident)
+                } else {
+                    (temps, rebuilt)
+                }
+            }
+            HirExpr::NewObj(mut n) => {
+                let mut temps = Vec::new();
+                let mut args = Vec::with_capacity(n.args.len());
+                for arg in n.args {
+                    let (mut arg_temps, lowered_arg) = self.separate_temporaries(arg, false);
+                    temps.append(&mut arg_temps);
+                    args.push(lowered_arg);
+                }
+                n.args = args;
+                let rebuilt = HirExpr::NewObj(n);
+                if !is_root && self.should_hoist_temporary_expr(&rebuilt) {
+                    let (stmt, ident) = self.hoist_expr_into_temp(rebuilt);
+                    temps.push(stmt);
+                    (temps, ident)
+                } else {
+                    (temps, rebuilt)
+                }
+            }
+            HirExpr::ListLiteral(mut l) => {
+                let mut temps = Vec::new();
+                let mut items = Vec::with_capacity(l.items.len());
+                for item in l.items {
+                    let (mut item_temps, lowered_item) = self.separate_temporaries(item, false);
+                    temps.append(&mut item_temps);
+                    items.push(lowered_item);
+                }
+                l.items = items;
+                (temps, HirExpr::ListLiteral(l))
+            }
+            HirExpr::IntrinsicCall(mut i) => {
+                let mut temps = Vec::new();
+                let mut args = Vec::with_capacity(i.args.len());
+                for arg in i.args {
+                    let (mut arg_temps, lowered_arg) = self.separate_temporaries(arg, false);
+                    temps.append(&mut arg_temps);
+                    args.push(lowered_arg);
+                }
+                i.args = args;
+                (temps, HirExpr::IntrinsicCall(i))
+            }
+            other => (Vec::new(), other),
         }
     }
 
