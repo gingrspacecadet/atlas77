@@ -76,6 +76,7 @@ declare_error_type! {
         CannotGenerateADestructorForThisType(CannotGenerateADestructorForThisTypeError),
         CannotMoveFromRvalue(CannotMoveFromRvalueError),
         TypeIsNotCopyable(TypeIsNotCopyableError),
+        TypeIsNotTriviallyCopyable(TypeIsNotTriviallyCopyableError),
         ListIndexOutOfBounds(ListIndexOutOfBoundsError),
         IncorrectIntrinsicCallArguments(IncorrectIntrinsicCallArgumentsError),
         CannotAccessFieldOfPointers(CannotAccessFieldOfPointersError),
@@ -1094,7 +1095,7 @@ pub struct CannotGenerateADestructorForThisTypeError {
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Cannot move from rvalue")]
-#[diagnostic(code(atlas::ownership::cannot_move_from_rvalue))]
+#[diagnostic(code(sema::cannot_move_from_rvalue))]
 pub struct CannotMoveFromRvalueError {
     #[source_code]
     pub src: NamedSource<String>,
@@ -1108,12 +1109,30 @@ pub struct CannotMoveFromRvalueError {
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Type is not copyable")]
-#[diagnostic(code(atlas::ownership::type_not_copyable))]
+#[diagnostic(code(sema::type_not_copyable))]
 pub struct TypeIsNotCopyableError {
     #[source_code]
     pub src: NamedSource<String>,
 
     #[label("Type '{type_name}' doesn't implement std::copyable")]
+    pub span: Span,
+
+    pub type_name: String,
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[error("Type is not trivially copyable")]
+#[diagnostic(
+    code(sema::type_not_trivially_copyable),
+    help(
+        "implicit copies (e.g. `let foo = bar`) require `std::trivially_copyable`; use `std::move(&p)`/`std::take(&p)` to transfer ownership, or `p.copy()`/`std::copy(&p)` for an explicit copy when available"
+    )
+)]
+pub struct TypeIsNotTriviallyCopyableError {
+    #[source_code]
+    pub src: NamedSource<String>,
+
+    #[label("Type '{type_name}' doesn't implement std::trivially_copyable")]
     pub span: Span,
 
     pub type_name: String,

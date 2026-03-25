@@ -78,6 +78,96 @@ pub struct AstSyntaxLoweringPass<'ast, 'hir> {
 }
 
 impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
+    fn type_requires_auto_delete(
+        &self,
+        ty: &'hir HirTy<'hir>,
+        requires_drop: &BTreeMap<&'hir str, bool>,
+    ) -> bool {
+        match ty {
+            HirTy::PtrTy(_)
+            | HirTy::Function(_)
+            | HirTy::Slice(_)
+            | HirTy::Unit(_)
+            | HirTy::Boolean(_)
+            | HirTy::Integer(_)
+            | HirTy::Float(_)
+            | HirTy::Char(_)
+            | HirTy::UnsignedInteger(_)
+            | HirTy::String(_)
+            | HirTy::LiteralInteger(_)
+            | HirTy::LiteralFloat(_)
+            | HirTy::LiteralUnsignedInteger(_)
+            | HirTy::Uninitialized(_) => false,
+            HirTy::InlineArray(arr) => self.type_requires_auto_delete(arr.inner, requires_drop),
+            HirTy::Named(n) => {
+                if self.module_signature.enums.contains_key(n.name)
+                    || self.module_signature.unions.contains_key(n.name)
+                {
+                    return false;
+                }
+                if let Some(sig) = self.module_signature.structs.get(n.name)
+                    && sig.had_user_defined_destructor
+                {
+                    return true;
+                }
+                requires_drop.get(n.name).copied().unwrap_or(false)
+            }
+            HirTy::Generic(g) => {
+                if self.module_signature.enums.contains_key(g.name)
+                    || self.module_signature.unions.contains_key(g.name)
+                {
+                    return false;
+                }
+                if let Some(sig) = self.module_signature.structs.get(g.name)
+                    && sig.had_user_defined_destructor
+                {
+                    return true;
+                }
+                requires_drop.get(g.name).copied().unwrap_or(false)
+            }
+        }
+    }
+
+    fn compute_auto_destructor_requirements(&self) -> BTreeMap<&'hir str, bool> {
+        let mut requires_drop: BTreeMap<&'hir str, bool> = self
+            .module_body
+            .structs
+            .keys()
+            .map(|name| (*name, false))
+            .collect();
+
+        // User-defined destructors always make the type non-trivial to drop.
+        for (name, strct) in &self.module_body.structs {
+            if strct.signature.had_user_defined_destructor {
+                requires_drop.insert(*name, true);
+            }
+        }
+
+        loop {
+            let mut changed = false;
+            for (name, strct) in &self.module_body.structs {
+                if strct.signature.had_user_defined_destructor {
+                    continue;
+                }
+                let needs_drop = strct
+                    .signature
+                    .fields
+                    .values()
+                    .any(|field| self.type_requires_auto_delete(field.ty, &requires_drop));
+                if needs_drop && !requires_drop.get(name).copied().unwrap_or(false) {
+                    requires_drop.insert(*name, true);
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        requires_drop
+    }
+
     pub fn new(
         arena: &'hir HirArena<'hir>,
         ast: &'ast AstProgram,
@@ -100,6 +190,14 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
 }
 
 impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
+    fn method_returns_self(&self, method: &HirStructMethod<'hir>, struct_name: &'hir str) -> bool {
+        match &method.signature.return_ty {
+            HirTy::Named(n) => n.name == struct_name,
+            HirTy::Generic(g) => g.name == struct_name,
+            _ => false,
+        }
+    }
+
     pub fn lower(&mut self) -> HirResult<&'hir mut HirModule<'hir>> {
         for item in self.ast.items {
             self.visit_item(item)?;
@@ -110,8 +208,6 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             let report: ErrReport = warning.into();
             eprintln!("{:?}", report);
         }
-
-        self.generate_all_destructors()?;
 
         Ok(self.arena.intern(HirModule {
             body: self.module_body.clone(),
@@ -533,6 +629,21 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
         } else {
             None
         };
+
+        let has_copy_method = methods.iter().any(|method| {
+            method.name == "copy"
+                && method.signature.modifier == HirStructMethodModifier::Const
+                && method.signature.params.len() == 1
+                && self.method_returns_self(method, name)
+        });
+        let has_default_method = methods.iter().any(|method| {
+            method.name == "default"
+                && method.signature.modifier == HirStructMethodModifier::Static
+                && method.signature.params.is_empty()
+                && self.method_returns_self(method, name)
+        });
+        let is_trivially_copyable = matches!(node.flag, AstFlag::Copyable(_));
+
         let signature = HirStructSignature {
             declaration_span: node.span,
             name,
@@ -561,6 +672,9 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             generics,
             destructor: destructor.as_ref().map(|d| d.signature.clone()),
             had_user_defined_destructor,
+            is_std_copyable: has_copy_method || is_trivially_copyable,
+            is_std_default: has_default_method,
+            is_trivially_copyable,
             docstring: if let Some(docstring) = node.docstring {
                 Some(self.arena.names().get(docstring))
             } else {
@@ -1892,11 +2006,14 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
     }
 
     fn generate_all_destructors(&mut self) -> HirResult<()> {
+        let requires_drop = self.compute_auto_destructor_requirements();
         let structs_to_process: Vec<_> = self
             .module_body
             .structs
             .iter()
-            .filter(|(_, s)| s.destructor.is_none())
+            .filter(|(name, s)| {
+                s.destructor.is_none() && requires_drop.get(*name).copied().unwrap_or(false)
+            })
             .map(|(name, s)| {
                 (
                     ((*name).to_string(), s.name_span),
@@ -1930,7 +2047,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             };
             let mut statements = vec![];
             for field in fields.iter() {
-                if field.ty.is_primitive() {
+                if !self.type_requires_auto_delete(field.ty, &requires_drop) {
                     // No need to delete primitive types
                     continue;
                 }
@@ -1992,6 +2109,12 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     expr: delete_expr,
                 }));
             }
+
+            // Do not emit empty auto-destructors.
+            if statements.is_empty() {
+                continue;
+            }
+
             let hir = HirStructDestructor {
                 span: struct_span,
                 signature: self.arena.intern(signature),

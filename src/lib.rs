@@ -22,7 +22,9 @@ pub mod tcc;
 use crate::atlas_c::{
     atlas_codegen::{CCodeGen, HEADER_NAME},
     atlas_hir::{
-        dead_code_elimination_pass::DeadCodeEliminationPass, pretty_print::HirPrettyPrinter,
+        dead_code_elimination_pass::DeadCodeEliminationPass,
+        ownership_pass::HirOwnershipPass,
+        pretty_print::HirPrettyPrinter,
     },
     atlas_lir::hir_lowering_pass::HirLoweringPass,
 };
@@ -370,6 +372,10 @@ pub fn build(
     //type-check
     let mut type_checker = TypeChecker::new(&hir_arena);
     let mut hir = type_checker.check(hir)?;
+
+    //ownership analysis + RAII delete insertion
+    let mut ownership_pass = HirOwnershipPass::new(&hir_arena, &hir.signature);
+    hir = ownership_pass.run(hir)?;
 
     //Dead code elimination (only in release mode)
     let mut dce_pass = DeadCodeEliminationPass::new(&hir_arena);

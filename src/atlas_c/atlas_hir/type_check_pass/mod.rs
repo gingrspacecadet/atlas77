@@ -1,7 +1,10 @@
 mod context;
 
 use super::{
-    HirFunction, HirModule, HirModuleSignature, arena::HirArena, expr, stmt::HirStatement,
+    HirFunction, HirModule, HirModuleSignature,
+    arena::HirArena,
+    expr,
+    stmt::{HirBlock, HirExprStmt, HirStatement},
 };
 use crate::atlas_c::atlas_hir::error::{
     AccessingPrivateUnionError, CallingConsumingMethodOnMutableReferenceError,
@@ -13,8 +16,8 @@ use crate::atlas_c::atlas_hir::error::{
 use crate::atlas_c::atlas_hir::item::{HirStructDestructor, HirUnion};
 use crate::atlas_c::atlas_hir::pretty_print::HirPrettyPrinter;
 use crate::atlas_c::atlas_hir::signature::{
-    HirFunctionParameterSignature, HirFunctionSignature, HirStructMethodModifier,
-    HirStructSignature, HirVisibility,
+    HirFunctionParameterSignature, HirFunctionSignature, HirStructDestructorSignature,
+    HirStructFieldSignature, HirStructMethodModifier, HirStructSignature, HirVisibility,
 };
 use crate::atlas_c::atlas_hir::{
     error::{
@@ -31,7 +34,10 @@ use crate::atlas_c::atlas_hir::{
         TryingToMutateConstPointerError, TypeMismatchActual, TypeMismatchError, UnknownFieldError,
         UnknownIdentifierError, UnknownMethodError, UnknownTypeError, UnsupportedExpr,
     },
-    expr::{HirBinaryOperator, HirExpr, HirIdentExpr, HirUnaryOp, HirUnsignedIntegerLiteralExpr},
+    expr::{
+        HirBinaryOperator, HirDeleteExpr, HirExpr, HirFieldAccessExpr, HirIdentExpr,
+        HirThisLiteral, HirUnaryOp, HirUnsignedIntegerLiteralExpr,
+    },
     item::{HirStruct, HirStructMethod},
     monomorphization_pass::MonomorphizationPass,
     ty::{HirGenericTy, HirNamedTy, HirTy, HirTyId},
@@ -77,6 +83,11 @@ impl<'hir> TypeChecker<'hir> {
         hir: &'hir mut HirModule<'hir>,
     ) -> HirResult<&'hir mut HirModule<'hir>> {
         self.signature = hir.signature.clone();
+
+        // Auto-destructor synthesis now happens after monomorphization, during type checking.
+        self.synthesize_auto_destructors(hir);
+        self.signature = hir.signature.clone();
+
         for func in &mut hir.body.functions {
             self.current_func_name = Some(func.0);
             self.check_func(func.1)?;
@@ -89,6 +100,165 @@ impl<'hir> TypeChecker<'hir> {
             self.check_union(hir_union)?;
         }
         Ok(hir)
+    }
+
+    fn type_requires_drop(
+        &self,
+        ty: &'hir HirTy<'hir>,
+        requires_drop: &HashMap<&'hir str, bool>,
+    ) -> bool {
+        match ty {
+            HirTy::PtrTy(_)
+            | HirTy::Function(_)
+            | HirTy::Slice(_)
+            | HirTy::Unit(_)
+            | HirTy::Boolean(_)
+            | HirTy::Integer(_)
+            | HirTy::Float(_)
+            | HirTy::Char(_)
+            | HirTy::UnsignedInteger(_)
+            | HirTy::String(_)
+            | HirTy::LiteralInteger(_)
+            | HirTy::LiteralFloat(_)
+            | HirTy::LiteralUnsignedInteger(_)
+            | HirTy::Uninitialized(_) => false,
+            HirTy::InlineArray(arr) => self.type_requires_drop(arr.inner, requires_drop),
+            HirTy::Named(n) => {
+                if self.signature.enums.contains_key(n.name)
+                    || self.signature.unions.contains_key(n.name)
+                {
+                    return false;
+                }
+                if let Some(sig) = self.signature.structs.get(n.name)
+                    && sig.destructor.is_some()
+                {
+                    return true;
+                }
+                requires_drop.get(n.name).copied().unwrap_or(false)
+            }
+            HirTy::Generic(g) => {
+                if self.signature.enums.contains_key(g.name)
+                    || self.signature.unions.contains_key(g.name)
+                {
+                    return false;
+                }
+                if let Some(sig) = self.signature.structs.get(g.name)
+                    && sig.destructor.is_some()
+                {
+                    return true;
+                }
+                requires_drop.get(g.name).copied().unwrap_or(false)
+            }
+        }
+    }
+
+    fn synthesize_auto_destructors(&mut self, hir: &mut HirModule<'hir>) {
+        let mut requires_drop: HashMap<&'hir str, bool> =
+            hir.body.structs.keys().map(|name| (*name, false)).collect();
+
+        for (name, strct) in &hir.body.structs {
+            if strct.signature.had_user_defined_destructor || strct.destructor.is_some() {
+                requires_drop.insert(*name, true);
+            }
+        }
+
+        loop {
+            let mut changed = false;
+            for (name, strct) in &hir.body.structs {
+                if strct.signature.had_user_defined_destructor || strct.destructor.is_some() {
+                    continue;
+                }
+                let needs_drop = strct
+                    .signature
+                    .fields
+                    .values()
+                    .any(|field| self.type_requires_drop(field.ty, &requires_drop));
+                if needs_drop && !requires_drop.get(name).copied().unwrap_or(false) {
+                    requires_drop.insert(*name, true);
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        let to_generate: Vec<(&'hir str, Span, Vec<HirStructFieldSignature<'hir>>)> = hir
+            .body
+            .structs
+            .iter()
+            .filter(|(name, s)| {
+                s.destructor.is_none() && requires_drop.get(*name).copied().unwrap_or(false)
+            })
+            .map(|(name, s)| {
+                (
+                    *name,
+                    s.name_span,
+                    s.signature.fields.values().cloned().collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+
+        for (struct_name, struct_span, fields) in to_generate {
+            let mut statements = Vec::new();
+            for field in &fields {
+                if !self.type_requires_drop(field.ty, &requires_drop) {
+                    continue;
+                }
+
+                let delete_expr = HirExpr::Delete(HirDeleteExpr {
+                    span: field.span,
+                    expr: Box::new(HirExpr::FieldAccess(HirFieldAccessExpr {
+                        span: field.span,
+                        target: Box::new(HirExpr::ThisLiteral(HirThisLiteral {
+                            span: field.span,
+                            ty: self.arena.types().get_uninitialized_ty(),
+                        })),
+                        field: Box::new(HirIdentExpr {
+                            span: field.span,
+                            name: field.name,
+                            ty: field.ty,
+                        }),
+                        ty: field.ty,
+                        is_arrow: true,
+                    })),
+                });
+
+                statements.push(HirStatement::Expr(HirExprStmt {
+                    span: field.span,
+                    expr: delete_expr,
+                }));
+            }
+
+            if statements.is_empty() {
+                continue;
+            }
+
+            let signature = HirStructDestructorSignature {
+                span: struct_span,
+                vis: HirVisibility::Public,
+                where_clause: None,
+                docstring: None,
+            };
+            let hir_dtor = HirStructDestructor {
+                span: struct_span,
+                signature: self.arena.intern(signature),
+                body: HirBlock {
+                    span: struct_span,
+                    statements,
+                },
+                vis: HirVisibility::Public,
+            };
+
+            if let Some(strct) = hir.body.structs.get_mut(struct_name) {
+                strct.signature.destructor = Some(hir_dtor.signature.clone());
+                strct.destructor = Some(hir_dtor);
+                if let Some(sig_ref) = hir.signature.structs.get_mut(struct_name) {
+                    *sig_ref = self.arena.intern(strct.signature.clone());
+                }
+            }
+        }
     }
 
     fn check_union(&mut self, hir_union: &HirUnion<'hir>) -> HirResult<()> {
@@ -161,8 +331,10 @@ impl<'hir> TypeChecker<'hir> {
             self.check_method(method)?;
         }
 
-        self.current_func_name = Some("__dtor");
-        self.check_destructor(class.destructor.as_mut().unwrap())?;
+        if let Some(destructor) = class.destructor.as_mut() {
+            self.current_func_name = Some("__dtor");
+            self.check_destructor(destructor)?;
+        }
 
         Ok(())
     }
@@ -540,7 +712,10 @@ impl<'hir> TypeChecker<'hir> {
                         return Ok(self.arena.types().get_unit_ty());
                     }
                 };
-                if class.destructor.as_ref().unwrap().vis != HirVisibility::Public {
+                let Some(dtor) = class.destructor.as_ref() else {
+                    return Ok(self.arena.types().get_unit_ty());
+                };
+                if dtor.vis != HirVisibility::Public {
                     Err(Self::accessing_private_destructor_err(
                         &del_expr.span,
                         &format!("{}", class.name),
@@ -582,7 +757,28 @@ impl<'hir> TypeChecker<'hir> {
                     }
                 };
 
-                let method = class.methods.get(function_name).unwrap();
+                if function_name == "__dtor" {
+                    let mutable_self_ty =
+                        self.arena
+                            .types()
+                            .get_ptr_ty(self_ty, false, class.declaration_span);
+                    s.ty = mutable_self_ty;
+                    return Ok(mutable_self_ty);
+                }
+
+                let method = match class.methods.get(function_name) {
+                    Some(method) => method,
+                    None => {
+                        let path = expr.span().path;
+                        let src = utils::get_file_content(path).unwrap();
+                        return Err(HirError::UnknownMethod(UnknownMethodError {
+                            method_name: function_name.to_string(),
+                            ty_name: class.name.to_string(),
+                            span: expr.span(),
+                            src: NamedSource::new(path, src),
+                        }));
+                    }
+                };
                 match method.modifier {
                     HirStructMethodModifier::Const => {
                         let readonly_self_ty = self.arena.types().get_ptr_ty(
@@ -888,32 +1084,44 @@ impl<'hir> TypeChecker<'hir> {
                 Ok(l.ty)
             }
             HirExpr::ObjLiteral(obj_lit) => {
-                // Only support union literals for now
-                // It's just `name { .field = value, ... }`
-                let union_ty;
-                let union_signature = if let HirTy::Named(n) = obj_lit.ty {
-                    union_ty = n;
-                    let tmp = match self.signature.unions.get(n.name) {
-                        Some(c) => c,
-                        None => {
-                            return Err(Self::unknown_type_err(n.name, &obj_lit.span));
-                        }
-                    };
-                    *tmp
+                // Support both struct and union literals: `Type { .field = value, ... }`
+                let target_ty;
+                let mut struct_signature: Option<&HirStructSignature<'hir>> = None;
+                let mut union_signature = None;
+
+                if let HirTy::Named(n) = obj_lit.ty {
+                    target_ty = n;
+                    if let Some(sig) = self.signature.structs.get(n.name) {
+                        struct_signature = Some(*sig);
+                    } else if let Some(sig) = self.signature.unions.get(n.name) {
+                        union_signature = Some(*sig);
+                    } else {
+                        return Err(Self::unknown_type_err(n.name, &obj_lit.span));
+                    }
                 } else if let HirTy::Generic(g) = obj_lit.ty {
-                    let name = MonomorphizationPass::generate_mangled_name(self.arena, g, "union");
-                    union_ty = self.arena.intern(HirNamedTy { name, span: g.span })
-                        as &'hir HirNamedTy<'hir>;
-                    let tmp = match self.signature.unions.get(name) {
-                        Some(c) => c,
-                        None => {
-                            return Err(Self::unknown_type_err(
-                                &HirPrettyPrinter::generic_ty_str(g),
-                                &obj_lit.span,
-                            ));
-                        }
-                    };
-                    *tmp
+                    let struct_name =
+                        MonomorphizationPass::generate_mangled_name(self.arena, g, "struct");
+                    let union_name =
+                        MonomorphizationPass::generate_mangled_name(self.arena, g, "union");
+
+                    if let Some(sig) = self.signature.structs.get(struct_name) {
+                        target_ty = self.arena.intern(HirNamedTy {
+                            name: struct_name,
+                            span: g.span,
+                        }) as &'hir HirNamedTy<'hir>;
+                        struct_signature = Some(*sig);
+                    } else if let Some(sig) = self.signature.unions.get(union_name) {
+                        target_ty = self.arena.intern(HirNamedTy {
+                            name: union_name,
+                            span: g.span,
+                        }) as &'hir HirNamedTy<'hir>;
+                        union_signature = Some(*sig);
+                    } else {
+                        return Err(Self::unknown_type_err(
+                            &HirPrettyPrinter::generic_ty_str(g),
+                            &obj_lit.span,
+                        ));
+                    }
                 } else {
                     let path = obj_lit.span.path;
                     let src = utils::get_file_content(path).unwrap();
@@ -923,70 +1131,148 @@ impl<'hir> TypeChecker<'hir> {
                             src: NamedSource::new(path, src),
                         },
                     ));
-                };
-
-                if union_signature.name_span.path != obj_lit.span.path
-                    && union_signature.vis != HirVisibility::Public
-                {
-                    let origin_path = union_signature.name_span.path;
-                    let origin_src = utils::get_file_content(origin_path).unwrap();
-                    let obj_path = obj_lit.span.path;
-                    let obj_src = utils::get_file_content(obj_path).unwrap();
-                    return Err(HirError::AccessingPrivateUnion(
-                        AccessingPrivateUnionError {
-                            name: if let Some(n) = union_signature.pre_mangled_ty {
-                                HirPrettyPrinter::generic_ty_str(n)
-                            } else {
-                                union_ty.name.to_owned()
-                            },
-                            span: obj_lit.span,
-                            src: NamedSource::new(obj_path, obj_src),
-                            origin: AccessingPrivateObjectOrigin {
-                                span: union_signature.name_span,
-                                src: NamedSource::new(origin_path, origin_src),
-                            },
-                        },
-                    ));
                 }
 
-                if obj_lit.fields.len() > 1 {
-                    let origin = TryingToCreateAnUnionWithMoreThanOneActiveFieldOrigin {
-                        span: obj_lit.span,
-                        src: NamedSource::new(
-                            union_signature.name_span.path,
-                            utils::get_file_content(union_signature.name_span.path).unwrap(),
-                        ),
-                    };
-                    return Err(HirError::TryingToCreateAnUnionWithMoreThanOneActiveField(
-                        TryingToCreateAnUnionWithMoreThanOneActiveFieldError {
-                            span: obj_lit.span,
-                            src: NamedSource::new(
-                                obj_lit.span.path,
-                                utils::get_file_content(obj_lit.span.path).unwrap(),
-                            ),
-                            origin,
-                        },
-                    ));
-                }
+                if let Some(struct_signature) = struct_signature {
+                    if struct_signature.name_span.path != obj_lit.span.path
+                        && struct_signature.vis != HirVisibility::Public
+                    {
+                        let origin_path = struct_signature.name_span.path;
+                        let origin_src = utils::get_file_content(origin_path).unwrap();
+                        let obj_path = obj_lit.span.path;
+                        let obj_src = utils::get_file_content(obj_path).unwrap();
+                        return Err(HirError::AccessingPrivateStruct(
+                            AccessingPrivateStructError {
+                                name: if let Some(n) = struct_signature.pre_mangled_ty {
+                                    HirPrettyPrinter::generic_ty_str(n)
+                                } else {
+                                    target_ty.name.to_owned()
+                                },
+                                span: obj_lit.span,
+                                src: NamedSource::new(obj_path, obj_src),
+                                origin: AccessingPrivateObjectOrigin {
+                                    span: struct_signature.name_span,
+                                    src: NamedSource::new(origin_path, origin_src),
+                                },
+                            },
+                        ));
+                    }
 
-                for field in &mut obj_lit.fields {
-                    let field_signature = match union_signature.variants.get(field.name) {
-                        Some(f) => f,
-                        None => {
-                            return Err(Self::unknown_field_err(
-                                field.name,
-                                union_ty.name,
-                                &field.span,
+                    if struct_signature.name_span.path != obj_lit.span.path
+                        && let Some((private_name, _)) = struct_signature
+                            .fields
+                            .iter()
+                            .find(|(_, sig)| sig.vis != HirVisibility::Public)
+                    {
+                        let src = utils::get_file_content(obj_lit.span.path).unwrap();
+                        return Err(HirError::AccessingPrivateField(
+                            AccessingPrivateFieldError {
+                                span: obj_lit.span,
+                                kind: FieldKind::Field,
+                                src: NamedSource::new(obj_lit.span.path, src),
+                                field_name: (*private_name).to_string(),
+                            },
+                        ));
+                    }
+
+                    for field in &mut obj_lit.fields {
+                        let field_signature = match struct_signature.fields.get(field.name) {
+                            Some(f) => f,
+                            None => {
+                                return Err(Self::unknown_field_err(
+                                    field.name,
+                                    target_ty.name,
+                                    &field.span,
+                                ));
+                            }
+                        };
+
+                        if field_signature.span.path != obj_lit.span.path
+                            && field_signature.vis != HirVisibility::Public
+                        {
+                            let src = utils::get_file_content(obj_lit.span.path).unwrap();
+                            return Err(HirError::AccessingPrivateField(
+                                AccessingPrivateFieldError {
+                                    span: field.span,
+                                    kind: FieldKind::Field,
+                                    src: NamedSource::new(obj_lit.span.path, src),
+                                    field_name: field.name.to_string(),
+                                },
                             ));
                         }
-                    };
-                    let field_ty = self.check_expr(&mut field.value)?;
-                    self.is_equivalent_ty(
-                        field_signature.ty,
-                        field_signature.span,
-                        field_ty,
-                        field.value.span(),
-                    )?;
+
+                        let field_ty = self.check_expr(&mut field.value)?;
+                        self.is_equivalent_ty(
+                            field_signature.ty,
+                            field_signature.span,
+                            field_ty,
+                            field.value.span(),
+                        )?;
+                    }
+                } else if let Some(union_signature) = union_signature {
+                    if union_signature.name_span.path != obj_lit.span.path
+                        && union_signature.vis != HirVisibility::Public
+                    {
+                        let origin_path = union_signature.name_span.path;
+                        let origin_src = utils::get_file_content(origin_path).unwrap();
+                        let obj_path = obj_lit.span.path;
+                        let obj_src = utils::get_file_content(obj_path).unwrap();
+                        return Err(HirError::AccessingPrivateUnion(
+                            AccessingPrivateUnionError {
+                                name: if let Some(n) = union_signature.pre_mangled_ty {
+                                    HirPrettyPrinter::generic_ty_str(n)
+                                } else {
+                                    target_ty.name.to_owned()
+                                },
+                                span: obj_lit.span,
+                                src: NamedSource::new(obj_path, obj_src),
+                                origin: AccessingPrivateObjectOrigin {
+                                    span: union_signature.name_span,
+                                    src: NamedSource::new(origin_path, origin_src),
+                                },
+                            },
+                        ));
+                    }
+
+                    if obj_lit.fields.len() > 1 {
+                        let origin = TryingToCreateAnUnionWithMoreThanOneActiveFieldOrigin {
+                            span: obj_lit.span,
+                            src: NamedSource::new(
+                                union_signature.name_span.path,
+                                utils::get_file_content(union_signature.name_span.path).unwrap(),
+                            ),
+                        };
+                        return Err(HirError::TryingToCreateAnUnionWithMoreThanOneActiveField(
+                            TryingToCreateAnUnionWithMoreThanOneActiveFieldError {
+                                span: obj_lit.span,
+                                src: NamedSource::new(
+                                    obj_lit.span.path,
+                                    utils::get_file_content(obj_lit.span.path).unwrap(),
+                                ),
+                                origin,
+                            },
+                        ));
+                    }
+
+                    for field in &mut obj_lit.fields {
+                        let field_signature = match union_signature.variants.get(field.name) {
+                            Some(f) => f,
+                            None => {
+                                return Err(Self::unknown_field_err(
+                                    field.name,
+                                    target_ty.name,
+                                    &field.span,
+                                ));
+                            }
+                        };
+                        let field_ty = self.check_expr(&mut field.value)?;
+                        self.is_equivalent_ty(
+                            field_signature.ty,
+                            field_signature.span,
+                            field_ty,
+                            field.value.span(),
+                        )?;
+                    }
                 }
 
                 Ok(obj_lit.ty)

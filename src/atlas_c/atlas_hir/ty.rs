@@ -249,24 +249,28 @@ impl HirTy<'_> {
             return true;
         }
         match self {
+            HirTy::LiteralInteger(_)
+            | HirTy::LiteralFloat(_)
+            | HirTy::LiteralUnsignedInteger(_)
+            | HirTy::Function(_)
+            | HirTy::Slice(_) => true,
             HirTy::Named(named_ty) => {
-                if let Some(_) = signatures.structs.get(named_ty.name) {
-                    todo!("Implement a std::trivially_copyable detection")
-                } else {
-                    false
-                }
+                signatures
+                    .structs
+                    .get(named_ty.name)
+                    .is_some_and(|sig| sig.is_trivially_copyable || sig.is_std_copyable)
             }
             HirTy::Generic(generic_ty) => {
                 // No need to monomorphize the name. This is ready for the next rework of the passes.
                 // The monomorphization pass will happen AFTER the type checking pass in the future.
-                if let Some(_) = signatures.structs.get(generic_ty.name) {
-                    todo!("Implement a std::trivially_copyable detection")
-                } else {
-                    false
-                }
+                signatures
+                    .structs
+                    .get(generic_ty.name)
+                    .is_some_and(|sig| sig.is_trivially_copyable || sig.is_std_copyable)
             }
             // Pointers are trivially copyable (they're just addresses)
             HirTy::PtrTy(_) => true,
+            HirTy::InlineArray(arr) => arr.inner.is_copyable(signatures),
             _ => false,
         }
     }

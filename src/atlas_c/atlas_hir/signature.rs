@@ -46,6 +46,13 @@ pub struct HirStructSignature<'hir> {
     /// It's only optional, because at the beginning of the pass, the destructor might not exist yet
     pub destructor: Option<HirStructDestructorSignature<'hir>>,
     pub had_user_defined_destructor: bool,
+    /// True when the struct provides a userland `copy(*const this) -> Self`-style API
+    /// (or legacy copyable flag during transition).
+    pub is_std_copyable: bool,
+    /// True when the struct provides a userland `default() -> Self` static API.
+    pub is_std_default: bool,
+    /// True when this type is explicitly marked as trivially copyable.
+    pub is_trivially_copyable: bool,
     pub is_instantiated: bool,
     pub docstring: Option<&'hir str>,
     pub is_extern: bool,

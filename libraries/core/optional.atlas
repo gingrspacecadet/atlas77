@@ -9,11 +9,7 @@ public struct optional<T>
 private:
     storage: optional_storage<T>;
     has_value: bool;
-    optional(storage: optional_storage<T>, has_value: bool)
-    {
-        this->storage = storage;
-        this->has_value = has_value;
-    }
+
     ~optional()
     {
         if (this->has_value)
@@ -22,43 +18,16 @@ private:
         }
     }
 public:
-    optional(from: *const optional<T>)
-        where T: std::copyable
-    {
-        this->has_value = from->has_value;
-        if (this->has_value)
-        {
-            this->storage.value = from->storage.value;
-        }
-        else
-        {
-            this->storage.dummy = 0;
-        }
-    }
-    optional(dying_obj: *optional<T>)
-        where T: std::moveable
-    {
-        this->has_value = dying_obj->has_value;
-        if (this->has_value)
-        {
-            this->storage.value = move_t<T>(&dying_obj->storage.value);
-            dying_obj->has_value = false;
-        }
-        else
-        {
-            this->storage.dummy = 0;
-        }
-    }
     //! Construct an `optional<T>` containing `data`.
     //!
     //! Example:
     //!     let some = optional<int64>::of(42);
     fun of(data: T) -> optional<T>
     {
-        return new optional<T>(
-            optional_storage<T> { .value = data },
-            true
-        );
+        return optional<T>{
+            .storage = optional_storage<T> { .value = data },
+            .has_value = true
+        };
     }
     //! Construct an empty `optional<T>` with no value.
     //!
@@ -66,10 +35,10 @@ public:
     //!     let none = optional<int64>::empty();
     fun empty() -> optional<T>
     {
-        return new optional<T>(
-            optional_storage<T> { .dummy = 0 },
-            false
-        );
+        return optional<T>{
+            .storage = optional_storage<T> { .dummy = 0 },
+            .has_value = false
+        };
     }
     //! Returns true if no value is present.
     //!

@@ -227,6 +227,58 @@ impl<'hir> HirGenericPool<'hir> {
                             continue;
                         }
                     }
+                    HirGenericConstraintKind::Std {
+                        name: "default",
+                        span,
+                    } => {
+                        if !self.implements_std_default(module, instantiated_ty) {
+                            let origin_path = declaration_span.path;
+                            let origin_src = utils::get_file_content(origin_path).unwrap();
+                            let origin = TypeDoesNotImplementRequiredConstraintOrigin {
+                                span: *span,
+                                src: NamedSource::new(origin_path, origin_src),
+                            };
+                            let err_path = instantiated_generic.span.path;
+                            let err_src = utils::get_file_content(err_path).unwrap();
+                            let err = TypeDoesNotImplementRequiredConstraintError {
+                                ty: format!("{}", instantiated_ty),
+                                span: instantiated_generic.span,
+                                constraint: format!("{}", kind),
+                                src: NamedSource::new(err_path, err_src),
+                                origin,
+                            };
+                            eprintln!("{:?}", Into::<miette::Report>::into(err));
+                            are_constraints_satisfied = false;
+                        } else {
+                            continue;
+                        }
+                    }
+                    HirGenericConstraintKind::Std {
+                        name: "trivially_copyable",
+                        span,
+                    } => {
+                        if !self.implements_std_trivially_copyable(module, instantiated_ty) {
+                            let origin_path = declaration_span.path;
+                            let origin_src = utils::get_file_content(origin_path).unwrap();
+                            let origin = TypeDoesNotImplementRequiredConstraintOrigin {
+                                span: *span,
+                                src: NamedSource::new(origin_path, origin_src),
+                            };
+                            let err_path = instantiated_generic.span.path;
+                            let err_src = utils::get_file_content(err_path).unwrap();
+                            let err = TypeDoesNotImplementRequiredConstraintError {
+                                ty: format!("{}", instantiated_ty),
+                                span: instantiated_generic.span,
+                                constraint: format!("{}", kind),
+                                src: NamedSource::new(err_path, err_src),
+                                origin,
+                            };
+                            eprintln!("{:?}", Into::<miette::Report>::into(err));
+                            are_constraints_satisfied = false;
+                        } else {
+                            continue;
+                        }
+                    }
                     HirGenericConstraintKind::Std { name: _, span } => {
                         //Other std constraints not implemented yet
                         let origin_path = declaration_span.path;
@@ -264,6 +316,14 @@ impl<'hir> HirGenericPool<'hir> {
         module: &HirModuleSignature<'hir>,
         ty: &HirTy<'hir>,
     ) -> bool {
+        ty.is_copyable(module)
+    }
+
+    pub fn implements_std_default(
+        &self,
+        module: &HirModuleSignature<'hir>,
+        ty: &HirTy<'hir>,
+    ) -> bool {
         match ty {
             HirTy::Boolean(_)
             | HirTy::Integer(_)
@@ -272,33 +332,53 @@ impl<'hir> HirGenericPool<'hir> {
             | HirTy::String(_)
             | HirTy::UnsignedInteger(_)
             | HirTy::PtrTy(_)
-            // Function pointers are copyable, though I am still not sure if I want this behavior...
-            // Maybe closures that capture environment shouldn't be copyable?
-            | HirTy::Function(_) => true,
-            // Lists are copyable by default, they are just a pointer to the heap data
-            // THIS IS ONLY TEMPORARY. Lists need to be owned types, and if people want a reference to them,
-            // They'll need to do &const [T] or &[T]
-            // I just need to make c_vec works properly first (I still don't have the ptr<T> type implemented)
-            HirTy::Slice(_) => true,
-            HirTy::Named(n) => match module.structs.get(n.name) {
-                Some(struct_sig) => {
-                    todo!("Implement a std::trivially_copyable detection")
-                },
-                None => {
-                    false
-                },
-            },
-            HirTy::Generic(g) => {
-                let name = MonomorphizationPass::generate_mangled_name(self.arena, g, "struct");
-                match module.structs.get(name) {
-                    Some(struct_sig) => {
-                        todo!("Implement a std::trivially_copyable detection")
-                    },
-                    None => {
-                        false
-                    }
-                }
-            }
+            | HirTy::Function(_)
+            | HirTy::Slice(_)
+            | HirTy::Unit(_)
+            | HirTy::LiteralInteger(_)
+            | HirTy::LiteralUnsignedInteger(_)
+            | HirTy::LiteralFloat(_) => true,
+            HirTy::Named(n) => module
+                .structs
+                .get(n.name)
+                .is_some_and(|sig| sig.is_std_default),
+            HirTy::Generic(g) => module
+                .structs
+                .get(g.name)
+                .is_some_and(|sig| sig.is_std_default),
+            HirTy::InlineArray(arr) => self.implements_std_default(module, arr.inner),
+            _ => false,
+        }
+    }
+
+    pub fn implements_std_trivially_copyable(
+        &self,
+        module: &HirModuleSignature<'hir>,
+        ty: &HirTy<'hir>,
+    ) -> bool {
+        match ty {
+            HirTy::Boolean(_)
+            | HirTy::Integer(_)
+            | HirTy::Float(_)
+            | HirTy::Char(_)
+            | HirTy::String(_)
+            | HirTy::UnsignedInteger(_)
+            | HirTy::PtrTy(_)
+            | HirTy::Function(_)
+            | HirTy::Slice(_)
+            | HirTy::Unit(_)
+            | HirTy::LiteralInteger(_)
+            | HirTy::LiteralUnsignedInteger(_)
+            | HirTy::LiteralFloat(_) => true,
+            HirTy::Named(n) => module
+                .structs
+                .get(n.name)
+                .is_some_and(|sig| sig.is_trivially_copyable),
+            HirTy::Generic(g) => module
+                .structs
+                .get(g.name)
+                .is_some_and(|sig| sig.is_trivially_copyable),
+            HirTy::InlineArray(arr) => self.implements_std_trivially_copyable(module, arr.inner),
             _ => false,
         }
     }
