@@ -242,13 +242,6 @@ pub struct AstStruct<'ast> {
     pub vis: AstVisibility,
     pub fields: &'ast [&'ast AstObjField<'ast>],
     pub field_span: Span,
-    pub constructor: Option<&'ast AstConstructor<'ast>>,
-    /// Signature: `MyStruct(from: &const MyStruct)`
-    pub copy_constructor: Option<&'ast AstConstructor<'ast>>,
-    /// Signature: `MyStruct(dying_obj: &MyStruct)`
-    pub move_constructor: Option<&'ast AstConstructor<'ast>>,
-    /// Signature: `MyStruct()`
-    pub default_constructor: Option<&'ast AstConstructor<'ast>>,
     /// Signature: `~MyStruct()`
     pub destructor: Option<&'ast AstDestructor<'ast>>,
     pub generics: &'ast [&'ast AstGeneric<'ast>],
@@ -308,37 +301,6 @@ pub enum AstOverloadableOperator {
     Gte,
     And,
     Or,
-    /// Copy constructor like in C++
-    /// ```
-    /// struct Foo {
-    ///   x: int64;
-    ///   operator Copy(&const Foo) -> Foo {
-    ///     let other = &const Foo;
-    ///     return new Foo(other.x);
-    ///   }
-    /// }
-    Copy,
-}
-
-#[derive(Debug, Clone)]
-pub enum ConstructorKind {
-    Regular,
-    Copy,
-    Move,
-    Default,
-    Invalid, // Mutable self-reference - not allowed
-}
-
-#[derive(Debug, Clone)]
-pub struct AstConstructor<'ast> {
-    pub span: Span,
-    pub args: &'ast [&'ast AstArg<'ast>],
-    pub body: &'ast AstBlock<'ast>,
-    pub vis: AstVisibility,
-    /// Allows adding constraints on struct generics in the copy constructor
-    /// TODO: Maybe it's time to separate the copy constructor from the regular one
-    pub where_clause: Option<&'ast [&'ast AstGeneric<'ast>]>,
-    pub docstring: Option<&'ast str>,
 }
 
 #[derive(Debug, Clone)]
@@ -481,10 +443,8 @@ pub enum AstExpr<'ast> {
     Indexing(AstIndexingExpr<'ast>),
     FieldAccess(AstFieldAccessExpr<'ast>),
     StaticAccess(AstStaticAccessExpr<'ast>),
-    NewObj(AstNewObjExpr<'ast>),
     ObjLiteral(AstObjLiteralExpr<'ast>),
     Delete(AstDeleteObjExpr<'ast>),
-    NewArray(AstNewArrayExpr<'ast>),
     Block(AstBlock<'ast>),
     Assign(AstAssignStmt<'ast>),
     Casting(AstCastingExpr<'ast>),
@@ -504,10 +464,8 @@ impl AstExpr<'_> {
             AstExpr::Indexing(e) => e.span,
             AstExpr::FieldAccess(e) => e.span,
             AstExpr::StaticAccess(e) => e.span,
-            AstExpr::NewObj(e) => e.span,
             AstExpr::ObjLiteral(e) => e.span,
             AstExpr::Delete(e) => e.span,
-            AstExpr::NewArray(e) => e.span,
             AstExpr::Block(e) => e.span,
             AstExpr::Assign(e) => e.span,
             AstExpr::Casting(e) => e.span,
@@ -526,10 +484,8 @@ impl AstExpr<'_> {
             AstExpr::Indexing(_) => "Indexing",
             AstExpr::FieldAccess(_) => "FieldAccess",
             AstExpr::StaticAccess(_) => "StaticAccess",
-            AstExpr::NewObj(_) => "NewObj",
             AstExpr::ObjLiteral(_) => "ObjLiteral",
             AstExpr::Delete(_) => "Delete",
-            AstExpr::NewArray(_) => "NewArray",
             AstExpr::Block(_) => "Block",
             AstExpr::Assign(_) => "Assign",
             AstExpr::Casting(_) => "Casting",
@@ -576,21 +532,6 @@ pub struct AstReturnStmt<'ast> {
 pub struct AstBlock<'ast> {
     pub span: Span,
     pub stmts: &'ast [&'ast AstStatement<'ast>],
-}
-
-#[derive(Debug, Clone)]
-pub struct AstNewObjExpr<'ast> {
-    pub span: Span,
-    pub ty: &'ast AstType<'ast>,
-    pub args: &'ast [&'ast AstExpr<'ast>],
-    pub is_heap_allocation: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct AstNewArrayExpr<'ast> {
-    pub span: Span,
-    pub ty: &'ast AstType<'ast>,
-    pub size: &'ast AstExpr<'ast>,
 }
 
 #[derive(Debug, Clone)]

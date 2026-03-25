@@ -7,7 +7,7 @@ use crate::atlas_c::{
             HirResult, NotEnoughGenericsError, NotEnoughGenericsOrigin, UnknownTypeError,
         },
         expr::HirExpr,
-        item::{HirStruct, HirStructConstructor, HirUnion},
+        item::{HirStruct, HirStructDestructor, HirUnion},
         monomorphization_pass::generic_pool::HirGenericPool,
         signature::{HirGenericConstraint, HirGenericConstraintKind, HirModuleSignature},
         stmt::HirStatement,
@@ -124,7 +124,7 @@ impl<'hir> MonomorphizationPass<'hir> {
         }
 
         // Also scan non-generic struct members to discover generic instantiations
-        // used inside methods/constructors of concrete structs.
+        // used inside methods of concrete structs.
         let non_generic_structs: Vec<_> = module
             .body
             .structs
@@ -139,28 +139,6 @@ impl<'hir> MonomorphizationPass<'hir> {
             } else {
                 continue;
             };
-
-            for statement in updated_struct.constructor.body.statements.iter_mut() {
-                self.monomorphize_statement(statement, vec![], module)?;
-            }
-
-            if let Some(copy_ctor) = updated_struct.copy_constructor.as_mut() {
-                for statement in copy_ctor.body.statements.iter_mut() {
-                    self.monomorphize_statement(statement, vec![], module)?;
-                }
-            }
-
-            if let Some(move_ctor) = updated_struct.move_constructor.as_mut() {
-                for statement in move_ctor.body.statements.iter_mut() {
-                    self.monomorphize_statement(statement, vec![], module)?;
-                }
-            }
-
-            if let Some(default_ctor) = updated_struct.default_constructor.as_mut() {
-                for statement in default_ctor.body.statements.iter_mut() {
-                    self.monomorphize_statement(statement, vec![], module)?;
-                }
-            }
 
             if let Some(dtor) = updated_struct.destructor.as_mut() {
                 for statement in dtor.body.statements.iter_mut() {
@@ -185,7 +163,6 @@ impl<'hir> MonomorphizationPass<'hir> {
                     inner: instance.args.clone(),
                     span: instance.span,
                 });
-                // Check constraints before monomorphizing (copy constructors are now available)
                 if let Some(struct_sig) = module.signature.structs.get(instance.name) {
                     let constraints = struct_sig.generics.clone();
                     if !constraints.is_empty()
@@ -214,7 +191,6 @@ impl<'hir> MonomorphizationPass<'hir> {
                     inner: instance.args.clone(),
                     span: instance.span,
                 });
-                // Check constraints before monomorphizing (copy constructors are now available)
                 if let Some(union_sig) = module.signature.unions.get(instance.name) {
                     let constraints = union_sig.generics.clone();
                     if !constraints.is_empty()
@@ -244,7 +220,6 @@ impl<'hir> MonomorphizationPass<'hir> {
                     inner: instance.args.clone(),
                     span: instance.span,
                 });
-                // Check constraints before monomorphizing (copy constructors are now available)
                 if let Some(func_sig) = module.signature.functions.get(instance.name) {
                     let constraints = func_sig.generics.clone();
                     if !constraints.is_empty()
@@ -402,121 +377,13 @@ impl<'hir> MonomorphizationPass<'hir> {
 
         self.monomorphize_fields(&mut new_struct, &generics, actual_type, module)?;
 
-        self.monomorphize_constructor(
-            &mut new_struct.constructor,
-            types_to_change.clone(),
-            module,
-        )?;
         if let Some(destructor) = new_struct.destructor.as_mut() {
-            self.monomorphize_constructor(destructor, types_to_change.clone(), module)?;
+            self.monomorphize_destructor(destructor, types_to_change.clone(), module)?;
         } else {
             unreachable!(
                 "Struct destructor missing during monomorphization for struct {}",
                 new_struct.signature.name
             );
-        }
-
-        // Monomorphize copy constructor signature params first, then sync body params
-        if let Some(copy_ctor_sig) = new_struct.signature.copy_constructor.as_mut() {
-            // Check where_clause constraints for copy constructor
-            if let Some(where_clause) = &copy_ctor_sig.where_clause {
-                let is_satisfied = self.check_where_constraints_on_method(
-                    where_clause,
-                    &generics,
-                    actual_type,
-                    &module.signature,
-                );
-                copy_ctor_sig.is_constraint_satisfied = is_satisfied;
-
-                // If constraints are not satisfied, remove the copy constructor body
-                if !is_satisfied {
-                    new_struct.copy_constructor = None;
-                }
-            }
-
-            for arg in copy_ctor_sig.params.iter_mut() {
-                for (j, generic) in generics.iter().enumerate() {
-                    arg.ty = self.change_inner_type(
-                        arg.ty,
-                        generic.generic_name,
-                        actual_type.inner[j].clone(),
-                        module,
-                    );
-                }
-            }
-        }
-
-        // Monomorphize copy constructor body (only if constraints are satisfied)
-        if let Some(copy_ctor) = new_struct.copy_constructor.as_mut() {
-            self.monomorphize_constructor(copy_ctor, types_to_change.clone(), module)?;
-            // Sync body params from signature
-            for (i, _) in copy_ctor.params.clone().iter().enumerate() {
-                copy_ctor.params[i] = new_struct
-                    .signature
-                    .copy_constructor
-                    .as_ref()
-                    .unwrap()
-                    .params[i]
-                    .clone();
-            }
-        }
-
-        // Monomorphize move constructor signature params first, then sync body params
-        if let Some(move_ctor_sig) = new_struct.signature.move_constructor.as_mut() {
-            // Check where_clause constraints for move constructor
-            if let Some(where_clause) = &move_ctor_sig.where_clause {
-                let is_satisfied = self.check_where_constraints_on_method(
-                    where_clause,
-                    &generics,
-                    actual_type,
-                    &module.signature,
-                );
-                move_ctor_sig.is_constraint_satisfied = is_satisfied;
-
-                // If constraints are not satisfied, remove the move constructor body
-                if !is_satisfied {
-                    new_struct.move_constructor = None;
-                }
-            }
-
-            for arg in move_ctor_sig.params.iter_mut() {
-                for (j, generic) in generics.iter().enumerate() {
-                    arg.ty = self.change_inner_type(
-                        arg.ty,
-                        generic.generic_name,
-                        actual_type.inner[j].clone(),
-                        module,
-                    );
-                }
-            }
-        }
-
-        // Monomorphize move constructor body (only if constraints are satisfied)
-        if let Some(move_ctor) = new_struct.move_constructor.as_mut() {
-            self.monomorphize_constructor(move_ctor, types_to_change.clone(), module)?;
-            // Sync body params from signature
-            for (i, _) in move_ctor.params.clone().iter().enumerate() {
-                move_ctor.params[i] =
-                    if let Some(ctor) = new_struct.signature.move_constructor.as_ref() {
-                        ctor.params[i].clone()
-                    } else {
-                        unreachable!(
-                            "Struct move constructor missing during monomorphization for struct {}",
-                            new_struct.signature.name
-                        );
-                    }
-            }
-        }
-
-        for arg in new_struct.signature.constructor.params.iter_mut() {
-            for (j, generic) in generics.iter().enumerate() {
-                arg.ty = self.change_inner_type(
-                    arg.ty,
-                    generic.generic_name,
-                    actual_type.inner[j].clone(),
-                    module,
-                );
-            }
         }
 
         // Check and mark methods based on where_clause constraints
@@ -599,7 +466,7 @@ impl<'hir> MonomorphizationPass<'hir> {
         }
 
         //At this point the signature is fully monomorphized, but the actual struct itself isn't.
-        //We still need to change the new_struct.fields/new_struct.methods/new_struct.constructor
+        //We still need to change the new_struct.fields/new_struct.methods
 
         for (i, field) in new_struct.fields.clone().iter().enumerate() {
             new_struct.fields[i] = new_struct.signature.fields.get(field.name).unwrap().clone();
@@ -614,13 +481,6 @@ impl<'hir> MonomorphizationPass<'hir> {
                     .clone(),
             );
         }
-
-        for (i, _) in new_struct.constructor.params.clone().iter().enumerate() {
-            new_struct.constructor.params[i] = new_struct.signature.constructor.params[i].clone();
-        }
-
-        //And lastly, we need to update the statements inside the constructor and methods to reflect the new types.
-        //It's mostly changing the name of every `new Struct<Generic>` to `new __atlas77__Struct__actual_types`
 
         for method in new_struct.methods.iter_mut() {
             for statement in method.body.statements.iter_mut() {
@@ -755,19 +615,14 @@ impl<'hir> MonomorphizationPass<'hir> {
         Ok(())
     }
 
-    fn monomorphize_constructor(
+    fn monomorphize_destructor(
         &mut self,
-        constructor: &mut HirStructConstructor<'hir>,
+        dtor: &mut HirStructDestructor<'hir>,
         types_to_change: Vec<(&'hir str, &'hir HirTy<'hir>)>,
         module: &HirModule<'hir>,
     ) -> HirResult<()> {
-        //Monomorphize params
-        for param in constructor.params.iter_mut() {
-            param.ty = self.swap_generic_types_in_ty(param.ty, types_to_change.clone());
-        }
-
         //Monomorphize body
-        for statement in constructor.body.statements.iter_mut() {
+        for statement in dtor.body.statements.iter_mut() {
             self.monomorphize_statement(statement, types_to_change.clone(), module)?;
         }
         Ok(())
@@ -867,25 +722,7 @@ impl<'hir> MonomorphizationPass<'hir> {
             | HirExpr::ThisLiteral(_)
             | HirExpr::StringLiteral(_)
             | HirExpr::NullLiteral(_)
-            | HirExpr::Copy(_)
             | HirExpr::FieldAccess(_) => {}
-            HirExpr::NewObj(new_obj_expr) => {
-                if let HirTy::Generic(_g) = new_obj_expr.ty {
-                    let monomorphized_ty =
-                        self.swap_generic_types_in_ty(new_obj_expr.ty, types_to_change.clone());
-
-                    // Register the monomorphized struct, not the generic one with unresolved parameters
-                    if let HirTy::Generic(g_mono) = monomorphized_ty {
-                        self.generic_pool
-                            .register_struct_instance(g_mono.clone(), &module.signature);
-                    }
-
-                    new_obj_expr.ty = monomorphized_ty;
-                }
-                for arg in new_obj_expr.args.iter_mut() {
-                    self.monomorphize_expression(arg, types_to_change.clone(), module)?;
-                }
-            }
             HirExpr::ObjLiteral(obj_lit_expr) => {
                 if let HirTy::Generic(_g) = obj_lit_expr.ty {
                     let monomorphized_ty =
@@ -990,21 +827,6 @@ impl<'hir> MonomorphizationPass<'hir> {
                 for item in list_expr.items.iter_mut() {
                     self.monomorphize_expression(item, types_to_change.clone(), module)?;
                 }
-            }
-            HirExpr::NewArray(new_array_expr) => {
-                if let HirTy::Slice(_l) = new_array_expr.ty {
-                    let ty =
-                        self.swap_generic_types_in_ty(new_array_expr.ty, types_to_change.clone());
-
-                    if let HirTy::Slice(l_mono) = ty
-                        && let HirTy::Generic(g_mono) = l_mono.inner
-                    {
-                        self.generic_pool
-                            .register_struct_instance(g_mono.clone(), &module.signature);
-                    }
-                    new_array_expr.ty = ty;
-                }
-                self.monomorphize_expression(&mut new_array_expr.size, types_to_change, module)?;
             }
             HirExpr::StaticAccess(static_access) => {
                 let monomorphized_ty =

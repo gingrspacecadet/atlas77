@@ -7,7 +7,7 @@ use crate::atlas_c::{
         HirModule,
         arena::HirArena,
         expr::{HirBinaryOperator, HirExpr, HirUnaryOp},
-        item::{HirFunction, HirStruct, HirStructConstructor, HirStructMethod, HirUnion},
+        item::{HirFunction, HirStruct, HirStructDestructor, HirStructMethod, HirUnion},
         monomorphization_pass::MonomorphizationPass,
         signature::{ConstantValue, HirStructMethodModifier},
         stmt::HirStatement,
@@ -227,38 +227,17 @@ impl<'hir> HirLoweringPass<'hir> {
             functions.push(lir_method);
         }
 
-        functions.push(self.lower_constructor(
-            struct_body.name,
-            &struct_body.constructor,
-            "__ctor",
-        )?);
-        if let Some(move_ctor) = &struct_body.move_constructor {
-            functions.push(self.lower_constructor(struct_body.name, move_ctor, "__move_ctor")?);
-        }
-        if let Some(copy_ctor) = &struct_body.copy_constructor {
-            functions.push(self.lower_constructor(struct_body.name, copy_ctor, "__copy_ctor")?);
-        }
-        if let Some(default_ctor) = &struct_body.default_constructor {
-            functions.push(self.lower_constructor(
-                struct_body.name,
-                default_ctor,
-                "__default_ctor",
-            )?);
-        }
         if let Some(destructor) = &struct_body.destructor {
-            functions.push(self.lower_constructor(struct_body.name, destructor, "__dtor")?);
+            functions.push(self.lower_destructor(struct_body.name, destructor, "__dtor")?);
         }
 
         Ok(lir_struct)
     }
 
-    /// Lower a struct constructor
-    /// kind can be "new"/"copy"/"default"/"move"
-    /// TODO: Add an enum for kind instead of using &str
-    fn lower_constructor(
+    fn lower_destructor(
         &mut self,
         struct_name: &str,
-        ctor: &'hir HirStructConstructor<'hir>,
+        ctor: &'hir HirStructDestructor<'hir>,
         kind: &str,
     ) -> LirResult<LirFunction> {
         // Reset state for new function
@@ -273,11 +252,6 @@ impl<'hir> HirLoweringPass<'hir> {
             is_const: false,
             inner: Box::new(LirTy::StructType(struct_name.to_string())),
         });
-        // Build parameter map
-        for (idx, param) in ctor.params.iter().enumerate() {
-            self.param_map.insert(param.name, (idx + 1) as u8);
-            args.push(self.hir_ty_to_lir_ty(param.ty, param.span));
-        }
 
         // Initialize current function with entry block
         self.current_function = Some(LirFunction {
@@ -666,6 +640,8 @@ impl<'hir> HirLoweringPass<'hir> {
 
             HirExpr::BooleanLiteral(lit) => Ok(LirOperand::ImmBool(lit.value)),
 
+            HirExpr::FloatLiteral(lit) => Ok(LirOperand::ImmFloat(lit.value)),
+
             HirExpr::CharLiteral(lit) => Ok(LirOperand::ImmChar(lit.value)),
 
             HirExpr::StringLiteral(lit) => {
@@ -842,61 +818,6 @@ impl<'hir> HirLoweringPass<'hir> {
                 Ok(dest)
             }
 
-            // === Constructor ===
-            HirExpr::NewObj(new_obj) => {
-                let mut args = Vec::new();
-                for arg in &new_obj.args {
-                    args.push(self.lower_expr(arg)?);
-                }
-
-                let new_expr_ty = self.hir_ty_to_lir_ty(new_obj.ty, new_obj.span);
-                let pointee_ty = match new_expr_ty {
-                    LirTy::Ptr { inner, .. } => (*inner).clone(),
-                    _ => {
-                        return Err(unsupported_expr(
-                            new_obj.span,
-                            format!(
-                                "Expected pointer type for new-expression, found {:?}",
-                                new_expr_ty
-                            ),
-                        ));
-                    }
-                };
-
-                let stack_value = self.new_temp();
-                self.emit(LirInstr::Construct {
-                    ty: pointee_ty.clone(),
-                    dst: stack_value.clone(),
-                    args,
-                    ctor_kind: String::from("__ctor"),
-                })?;
-
-                let dest = self.new_temp();
-                self.emit(LirInstr::HeapAllocCopy {
-                    ty: pointee_ty,
-                    dst: dest.clone(),
-                    src: stack_value,
-                })?;
-                Ok(dest)
-            }
-            // This just allocate on the stack an array with 0-initialized elements
-            HirExpr::NewArray(new_arr) => {
-                let dest = self.new_temp();
-                let ty = self.hir_ty_to_lir_ty(new_arr.ty, new_arr.span);
-                let size = match ty {
-                    LirTy::ArrayTy { inner: _, size } => size,
-                    _ => {
-                        return Err(unknown_type_err(&ty.to_string(), new_arr.size.span()));
-                    }
-                };
-                self.emit(LirInstr::ConstructArray {
-                    dst: dest.clone(),
-                    size,
-                    ty,
-                })?;
-                Ok(dest)
-            }
-
             // === ObjLiteral ===
             HirExpr::ObjLiteral(obj_lit) => {
                 let mut args = Vec::new();
@@ -962,17 +883,10 @@ impl<'hir> HirLoweringPass<'hir> {
                                 ));
                             }
                         };
-                        match static_access.field.name {
-                            "__move_ctor" | "__copy_ctor" | "__ctor" | "__dtor"
-                            | "__default_ctor" => (
-                                format!("{}_{}", object_name, static_access.field.name),
-                                true,
-                            ),
-                            _ => (
-                                format!("{}_{}", object_name, static_access.field.name),
-                                false,
-                            ),
-                        }
+                        (
+                            format!("{}_{}", object_name, static_access.field.name),
+                            false,
+                        )
                     }
                     HirExpr::FieldAccess(field_access) => {
                         let object_name = match self
@@ -1032,29 +946,11 @@ impl<'hir> HirLoweringPass<'hir> {
                             args.push(adjusted);
                         }
                         match static_access.field.name {
-                            "__ctor" | "__copy_ctor" | "__move_ctor" | "__default_ctor" => {
-                                let dest = self.new_temp();
-                                self.emit(LirInstr::Construct {
-                                    ty: self.hir_ty_to_lir_ty(static_access.ty, static_access.span),
-                                    dst: dest.clone(),
-                                    args,
-                                    ctor_kind: String::from(static_access.field.name),
-                                })?;
-                                return Ok(dest);
-                            }
-                            "__dtor" => {
-                                return Err(unsupported_expr(
-                                    expr.span(),
-                                    String::from("Direct destructor call isn't supported yet."),
-                                ));
-                            }
                             _ => {
                                 return Err(unsupported_expr(
                                     expr.span(),
                                     String::from(
-                                        "A function taking an implicit \"this\" has to be a field access or \
-                                        a special static access function (e.g.: `T::__ctor`, `T::__move_ctor`, \
-                                        `T::__copy_ctor`, `T::__dtor`, `T::__default_ctor`)",
+                                        "There is no special static method taking an implicit \"this\" in the language yet",
                                     ),
                                 ));
                             }
@@ -1063,9 +959,7 @@ impl<'hir> HirLoweringPass<'hir> {
                         return Err(unsupported_expr(
                             expr.span(),
                             String::from(
-                                "A function taking an implicit \"this\" has to be a field access or \
-                                a special static access function (e.g.: `T::__ctor`, `T::__move_ctor`, \
-                                `T::__copy_ctor`, `T::__dtor`, `T::__default_ctor`)",
+                                "There is no special static method taking an implicit \"this\" in the language yet",
                             ),
                         ));
                     }
@@ -1150,57 +1044,6 @@ impl<'hir> HirLoweringPass<'hir> {
                     src: Box::new(collection_operand),
                     index: Box::new(index_operand),
                 })
-            }
-
-            HirExpr::Copy(copy_expr) => {
-                if copy_expr.ty.is_primitive() {
-                    // For primitives, copy is just a value use
-                    // For objects, this would call the copy constructor
-                    self.lower_expr(&copy_expr.expr)
-                } else if copy_expr.ty.is_array() {
-                    let src = self.lower_expr(&copy_expr.expr)?;
-                    let ty = self.hir_ty_to_lir_ty(copy_expr.ty, copy_expr.span);
-                    let size = match ty {
-                        LirTy::ArrayTy { size, .. } => size,
-                        _ => {
-                            return Err(unsupported_expr(
-                                copy_expr.span,
-                                format!(
-                                    "Expected inline array type for copy expression, got {:?}",
-                                    ty
-                                ),
-                            ));
-                        }
-                    };
-
-                    let dest = self.new_temp();
-                    self.emit(LirInstr::ConstructArray {
-                        ty: ty.clone(),
-                        dst: dest.clone(),
-                        size,
-                    })?;
-                    self.emit(LirInstr::AggregateCopy {
-                        ty,
-                        dst: dest.clone(),
-                        src,
-                    })?;
-                    Ok(dest)
-                } else {
-                    let lowered_arg = self.lower_expr(&*copy_expr.expr)?;
-                    let arg = if matches!(copy_expr.expr.ty(), HirTy::PtrTy(_)) {
-                        lowered_arg
-                    } else {
-                        LirOperand::AsRef(Box::new(lowered_arg))
-                    };
-                    let dest = self.new_temp();
-                    self.emit(LirInstr::Construct {
-                        ty: self.hir_ty_to_lir_ty(copy_expr.ty, copy_expr.span),
-                        dst: dest.clone(),
-                        args: vec![arg],
-                        ctor_kind: String::from("__copy_ctor"),
-                    })?;
-                    Ok(dest)
-                }
             }
 
             HirExpr::Delete(delete_expr) => {

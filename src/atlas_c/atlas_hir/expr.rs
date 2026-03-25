@@ -21,16 +21,11 @@ pub enum HirExpr<'hir> {
     StringLiteral(HirStringLiteralExpr<'hir>),
     ListLiteral(HirListLiteralExpr<'hir>),
     NullLiteral(HirNullLiteralExpr<'hir>),
-    NewArray(HirNewArrayExpr<'hir>),
-    NewObj(HirNewObjExpr<'hir>),
     ObjLiteral(HirObjLiteralExpr<'hir>),
     Delete(HirDeleteExpr<'hir>),
     FieldAccess(HirFieldAccessExpr<'hir>),
     Indexing(HirIndexingExpr<'hir>),
     StaticAccess(HirStaticAccessExpr<'hir>),
-    /// Copy semantics: creates a new owned copy via copy constructor.
-    /// The source variable remains valid after this operation.
-    Copy(HirCopyExpr<'hir>),
     IntrinsicCall(HirIntrinsicCallExpr<'hir>),
 }
 
@@ -52,14 +47,11 @@ impl<'hir> HirExpr<'hir> {
             HirExpr::Call(expr) => expr.span,
             HirExpr::StringLiteral(expr) => expr.span,
             HirExpr::ListLiteral(expr) => expr.span,
-            HirExpr::NewArray(expr) => expr.span,
-            HirExpr::NewObj(expr) => expr.span,
             HirExpr::ObjLiteral(expr) => expr.span,
             HirExpr::Delete(expr) => expr.span,
             HirExpr::FieldAccess(expr) => expr.span,
             HirExpr::Indexing(expr) => expr.span,
             HirExpr::StaticAccess(expr) => expr.span,
-            HirExpr::Copy(expr) => expr.span,
             HirExpr::IntrinsicCall(expr) => expr.span,
         }
     }
@@ -81,14 +73,11 @@ impl<'hir> HirExpr<'hir> {
             HirExpr::Call(_) => "Function Call Expression",
             HirExpr::StringLiteral(_) => "String Literal",
             HirExpr::ListLiteral(_) => "List Literal",
-            HirExpr::NewArray(_) => "New Array Expression",
-            HirExpr::NewObj(_) => "New Object Expression",
             HirExpr::ObjLiteral(_) => "Object Literal Expression",
             HirExpr::Delete(_) => "Delete Expression",
             HirExpr::FieldAccess(_) => "Field Access Expression",
             HirExpr::Indexing(_) => "Indexing Expression",
             HirExpr::StaticAccess(_) => "Static Access Expression",
-            HirExpr::Copy(_) => "Copy Expression",
             HirExpr::IntrinsicCall(_) => "Intrinsic Call Expression",
         }
     }
@@ -110,14 +99,11 @@ impl<'hir> HirExpr<'hir> {
             HirExpr::Call(expr) => expr.ty,
             HirExpr::StringLiteral(expr) => expr.ty,
             HirExpr::ListLiteral(expr) => expr.ty,
-            HirExpr::NewArray(expr) => expr.ty,
-            HirExpr::NewObj(expr) => expr.ty,
             HirExpr::ObjLiteral(expr) => expr.ty,
             HirExpr::Delete(_) => &HirTy::Unit(HirUnitTy {}),
             HirExpr::FieldAccess(expr) => expr.ty,
             HirExpr::Indexing(expr) => expr.ty,
             HirExpr::StaticAccess(expr) => expr.ty,
-            HirExpr::Copy(expr) => expr.ty,
             HirExpr::IntrinsicCall(expr) => expr.ty,
         }
     }
@@ -192,35 +178,8 @@ pub struct HirUnitLiteralExpr<'hir> {
 }
 
 #[derive(Debug, Clone)]
-#[deprecated(note = "This will be changed to use the HirNewExpr instead. \
-It doesn't make sense to have the `new` keywords if it's on the stack by default")]
-pub struct HirNewArrayExpr<'hir> {
-    pub span: Span,
-    pub ty: &'hir HirTy<'hir>,
-    pub size: Box<HirExpr<'hir>>,
-}
-
-#[derive(Debug, Clone)]
 pub struct HirDeleteExpr<'hir> {
     pub span: Span,
-    pub expr: Box<HirExpr<'hir>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct HirNewObjExpr<'hir> {
-    pub span: Span,
-    pub ty: &'hir HirTy<'hir>,
-    pub args: Vec<HirExpr<'hir>>,
-    pub args_ty: Vec<&'hir HirTy<'hir>>,
-    pub is_copy_constructor_call: bool,
-}
-
-// TODO: Maybe we should make it so the `new` keyword just wraps an expression
-// which means it allocates the value on the heap, returns a pointer and
-// register it for scope clean up in the ownership pass.
-pub struct HirNewExpr<'hir> {
-    pub span: Span,
-    pub ty: &'hir HirTy<'hir>,
     pub expr: Box<HirExpr<'hir>>,
 }
 
@@ -389,20 +348,5 @@ pub struct HirIntegerLiteralExpr<'hir> {
 pub struct HirIdentExpr<'hir> {
     pub name: &'hir str,
     pub span: Span,
-    pub ty: &'hir HirTy<'hir>,
-}
-
-/// Copy expression: creates a new owned copy via copy constructor.
-/// The source variable remains valid after this operation.
-///
-/// For primitive types, this is a bitwise copy.
-#[derive(Debug, Clone)]
-pub struct HirCopyExpr<'hir> {
-    pub span: Span,
-    /// The source variable name being copied from
-    pub source_name: &'hir str,
-    /// The expression being copied (usually an identifier)
-    pub expr: Box<HirExpr<'hir>>,
-    /// The type of the value being copied
     pub ty: &'hir HirTy<'hir>,
 }

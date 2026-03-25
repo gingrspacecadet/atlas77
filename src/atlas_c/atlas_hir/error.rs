@@ -30,12 +30,10 @@ declare_error_type! {
         EmptyListLiteral(EmptyListLiteralError),
         AccessingClassFieldOutsideClass(AccessingClassFieldOutsideClassError),
         AccessingPrivateField(AccessingPrivateFieldError),
-        AccessingPrivateConstructor(AccessingPrivateConstructorError),
+        AccessingPrivateDestructor(AccessingPrivateDestructorError),
         NonConstantValue(NonConstantValueError),
         ConstTyToNonConstTy(ConstTyToNonConstTyError),
         CanOnlyConstructStructs(CanOnlyConstructStructsError),
-        ThisStructDoesNotHaveACopyConstructor(ThisStructDoesNotHaveACopyConstructorError),
-        ThisStructDoesNotHaveAMoveConstructor(ThisStructDoesNotHaveAMoveConstructorError),
         TryingToIndexNonIndexableType(TryingToIndexNonIndexableTypeError),
         UselessError(UselessError),
         InvalidReadOnlyType(InvalidReadOnlyTypeError),
@@ -63,27 +61,19 @@ declare_error_type! {
         InvalidSpecialMethodSignature(InvalidSpecialMethodSignatureError),
         ReturningReferenceToLocalVariable(ReturningPointerToLocalVariableError),
         VariableNameAlreadyDefined(VariableNameAlreadyDefinedError),
-        TryingToCopyNonCopyableType(TryingToCopyNonCopyableTypeError),
         DoubleMoveError(DoubleMoveError),
         UnknownIdentifier(UnknownIdentifierError),
         UnknownField(UnknownFieldError),
         UnknownMethod(UnknownMethodError),
-        TypeIsNotMoveable(TypeIsNotMoveableError),
-        RecursiveCopyConstructor(RecursiveCopyConstructorError),
-        StdNonCopyableStructCannotHaveCopyConstructor(StdNonCopyableStructCannotHaveCopyConstructorError),
-        StdNonMoveableStructCannotHaveMoveConstructor(StdNonMoveableStructCannotHaveMoveConstructorError),
-        CopyConstructorParameterMustBeCopyable(CopyConstructorParameterMustBeCopyableError),
         StructCannotHaveAFieldOfItsOwnType(StructCannotHaveAFieldOfItsOwnTypeError),
         UnionMustHaveAtLeastTwoVariant(UnionMustHaveAtLeastTwoVariantError),
         UnionVariantDefinedMultipleTimes(UnionVariantDefinedMultipleTimesError),
         LifetimeDependencyViolation(LifetimeDependencyViolationError),
         ReturningValueWithLocalLifetimeDependency(ReturningValueWithLocalLifetimeDependencyError),
-        ConstructorCannotHaveAWhereClause(ConstructorCannotHaveAWhereClauseError),
         MethodConstraintNotSatisfied(MethodConstraintNotSatisfiedError),
         TooManyReferenceLevels(TooManyReferenceLevelsError),
         AssignmentCannotBeAnExpression(AssignmentCannotBeAnExpressionError),
         CannotGenerateADestructorForThisType(CannotGenerateADestructorForThisTypeError),
-        CannotImplicitlyCopyNonCopyableValue(CannotImplicitlyCopyNonCopyableValueError),
         CannotMoveFromRvalue(CannotMoveFromRvalueError),
         TypeIsNotCopyable(TypeIsNotCopyableError),
         ListIndexOutOfBounds(ListIndexOutOfBoundsError),
@@ -416,7 +406,7 @@ pub struct UnsupportedItemError {
 )]
 #[error("Not enough arguments provided to {kind}, expected {} but found {found}", origin.expected)]
 pub struct NotEnoughArgumentsError {
-    //The kind of callable (function, method, constructor, destructor etc.)
+    //The kind of callable (function or method, etc.)
     pub kind: String,
     pub found: usize,
     #[label = "only {found} were provided"]
@@ -573,15 +563,14 @@ pub struct CannotDeletePrimitiveTypeError {
 }
 
 #[derive(Error, Diagnostic, Debug)]
-#[diagnostic(code(sema::accessing_private_constructor))]
-#[error("Can't access private {kind} outside of its class")]
-pub struct AccessingPrivateConstructorError {
-    #[label("Trying to access a private {kind}")]
+#[diagnostic(code(sema::accessing_private_destructor))]
+#[error("Can't access the private destructor of {ty} outside of its class")]
+pub struct AccessingPrivateDestructorError {
+    #[label("Trying to access the private destructor here")]
     pub span: Span,
     #[source_code]
     pub src: NamedSource<String>,
-    //Either "constructor" or "destructor"
-    pub kind: String,
+    pub ty: String,
 }
 
 #[derive(Error, Diagnostic, Debug)]
@@ -625,30 +614,6 @@ pub struct TryingToIndexNonIndexableTypeError {
 #[error("You cannot construct non-struct types")]
 pub struct CanOnlyConstructStructsError {
     #[label = "only struct types can be constructed"]
-    pub span: Span,
-    #[source_code]
-    pub src: NamedSource<String>,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(code(sema::this_struct_does_not_have_a_copy_constructor))]
-#[error(
-    "It seems like you are trying to use a copy constructor on a struct that does not have one."
-)]
-pub struct ThisStructDoesNotHaveACopyConstructorError {
-    #[label = "trying to use copy constructor, but this struct does not have one defined"]
-    pub span: Span,
-    #[source_code]
-    pub src: NamedSource<String>,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(code(sema::this_struct_does_not_have_a_move_constructor))]
-#[error(
-    "It seems like you are trying to use a move constructor on a struct that does not have one."
-)]
-pub struct ThisStructDoesNotHaveAMoveConstructorError {
-    #[label = "trying to use move constructor, but this struct does not have one defined"]
     pub span: Span,
     #[source_code]
     pub src: NamedSource<String>,
@@ -876,22 +841,6 @@ pub struct TypeMismatchActual {
 
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(
-    code(sema::trying_to_copy_non_copyable_type),
-    help(
-        "type `{ty}` does not implement a copy constructor (`_copy` method). Consider moving the value instead, or implement a `_copy` method for the type."
-    )
-)]
-#[error("cannot copy value of type `{ty}` because it does not implement a copy constructor")]
-pub struct TryingToCopyNonCopyableTypeError {
-    #[label = "trying to copy this value"]
-    pub span: Span,
-    pub ty: String,
-    #[source_code]
-    pub src: NamedSource<String>,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
     code(sema::double_move),
     help(
         "a value can only be moved once. Consider cloning the value before the first move if you need to use it multiple times."
@@ -973,22 +922,6 @@ pub struct MethodConstraintNotSatisfiedError {
 
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(
-    code(sema::cannot_move_value),
-    help(
-        "type `{ty_name}` is not moveable. Consider implementing a move constructor (`{ty_name}(dying_obj: {ty_name}&&)` constructor) for this type if it should be moveable"
-    )
-)]
-#[error("Trying to move a non-moveable type `{ty_name}`")]
-pub struct TypeIsNotMoveableError {
-    #[label = "trying to move a non-moveable type here"]
-    pub span: Span,
-    pub ty_name: String,
-    #[source_code]
-    pub src: NamedSource<String>,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
     code(sema::cannot_move_out_of_loop),
     help(
         "variables cannot be moved inside loops because the loop could iterate multiple times, causing use-after-move. Consider moving the variable before the loop, or restructuring your code"
@@ -1025,83 +958,6 @@ pub struct CannotDeleteOutOfLoopError {
 
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(
-    code(sema::recursive_copy_constructor),
-    help(
-        "a copy constructor cannot copy the same type it's constructing, as this would cause infinite recursion."
-    )
-)]
-#[error("recursive copy detected in the Copy constructor for type `{type_name}`")]
-pub struct RecursiveCopyConstructorError {
-    #[label = "copy constructor defined here"]
-    pub method_span: Span,
-    #[label = "attempting to copy `{type_name}` inside its own copy constructor"]
-    pub copy_span: Span,
-    pub type_name: String,
-    #[source_code]
-    pub src: NamedSource<String>,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
-    code(sema::std_non_copyable_struct_cannot_have_copy_constructor),
-    help(
-        "structs marked as `std::non_copyable` are not allowed to have copy constructors. Remove either the copy constructor or the `std::non_copyable` attribute."
-    )
-)]
-#[error(
-    "struct `{struct_name}` is marked as `std::non_copyable` and cannot have a copy constructor"
-)]
-pub struct StdNonCopyableStructCannotHaveCopyConstructorError {
-    #[label = "copy constructor defined here"]
-    pub copy_ctor_span: Span,
-    #[label = "`std::non_copyable` flag set here"]
-    pub flag_span: Span,
-    #[source_code]
-    pub src: NamedSource<String>,
-    pub struct_name: String,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
-    code(sema::std_non_moveable_struct_cannot_have_move_constructor),
-    help(
-        "structs marked as `std::non_moveable` are not allowed to have move constructors. Remove either the move constructor or the `std::non_moveable` attribute."
-    )
-)]
-#[error(
-    "struct `{struct_name}` is marked as `std::non_moveable` and cannot have a move constructor"
-)]
-pub struct StdNonMoveableStructCannotHaveMoveConstructorError {
-    #[label = "move constructor defined here"]
-    pub copy_ctor_span: Span,
-    #[label = "`std::non_moveable` flag set here"]
-    pub flag_span: Span,
-    #[source_code]
-    pub src: NamedSource<String>,
-    pub struct_name: String,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
-    code(sema::copy_constructor_parameter_must_be_copyable),
-    help(
-        "a copy constructor copies the fields of the source object. If the type contains non-copyable fields, you cannot implement a copy constructor. Consider implementing a move constructor or restructuring your type."
-    )
-)]
-#[error(
-    "copy constructor for `{struct_name}` cannot be used because it contains non-copyable fields"
-)]
-pub struct CopyConstructorParameterMustBeCopyableError {
-    #[label = "copy constructor defined here"]
-    pub copy_ctor_span: Span,
-    #[label = "but `{struct_name}` contains fields that are not copyable"]
-    pub struct_span: Span,
-    pub struct_name: String,
-    #[source_code]
-    pub src: NamedSource<String>,
-}
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
     code(sema::struct_cannot_have_a_field_of_its_own_type),
     help(
         "A struct cannot directly or indirectly contain itself as a field, as this would create infinite size.
@@ -1110,7 +966,7 @@ This error occurs when:
   - A struct contains another struct that eventually contains the first struct (indirect cycle): `struct A {{ b: B }}` where `struct B {{ a: A }}`
 
 Solutions:
-  - Use a reference: `&T` or `&const T` (references are fixed-size pointers)
+  - Use a pointer: `*T` or `*const T` (pointers are fixed-size (8 bytes))
   - Use an indirection type: `optional<T>` or `expected<T, E>` (these allow null/empty states)
   - Redesign the data structure to avoid the cycle"
     )
@@ -1205,21 +1061,6 @@ pub struct ReturningValueWithLocalLifetimeDependencyError {
 
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(
-    code(sema::constructor_cannot_have_a_where_clause),
-    help(
-        "constructors cannot have where clauses, maybe you meant to use that clause on the copy constructor?"
-    )
-)]
-#[error("constructors cannot have where clauses, they aren't conditionally defined")]
-pub struct ConstructorCannotHaveAWhereClauseError {
-    #[label = "constructors cannot have where clauses"]
-    pub span: Span,
-    #[source_code]
-    pub src: NamedSource<String>,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
     code(sema::assignment_cannot_be_an_expression),
     help("assignments are statements and do not produce a value")
 )]
@@ -1249,25 +1090,6 @@ pub struct CannotGenerateADestructorForThisTypeError {
     #[label("Type `{type_name}` declared here")]
     pub name_span: Span,
     pub type_name: String,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
-    code(sema::cannot_implicitly_copy_non_copyable_value),
-    help(
-        "the value `{var_name}` of type `{ty_name}` cannot be implicitly copied because \
-        `{ty_name}` does not implement a copy constructor. Consider moving the value instead, \
-        with `move(&{var_name})`."
-    )
-)]
-#[error("cannot implicitly copy non-copyable value `{var_name}` of type `{ty_name}`")]
-pub struct CannotImplicitlyCopyNonCopyableValueError {
-    pub var_name: String,
-    pub ty_name: String,
-    #[label = "attempting to implicitly copy `{var_name}` here"]
-    pub span: Span,
-    #[source_code]
-    pub src: NamedSource<String>,
 }
 
 #[derive(Error, Diagnostic, Debug)]

@@ -227,32 +227,6 @@ impl<'hir> HirGenericPool<'hir> {
                             continue;
                         }
                     }
-                    HirGenericConstraintKind::Std {
-                        name: "moveable",
-                        span,
-                    } => {
-                        if !self.implements_std_moveable(module, instantiated_ty) {
-                            let origin_path = declaration_span.path;
-                            let origin_src = utils::get_file_content(origin_path).unwrap();
-                            let origin = TypeDoesNotImplementRequiredConstraintOrigin {
-                                span: *span,
-                                src: NamedSource::new(origin_path, origin_src),
-                            };
-                            let err_path = instantiated_generic.span.path;
-                            let err_src = utils::get_file_content(err_path).unwrap();
-                            let err = TypeDoesNotImplementRequiredConstraintError {
-                                ty: format!("{}", instantiated_ty),
-                                span: instantiated_generic.span,
-                                constraint: format!("{}", kind),
-                                src: NamedSource::new(err_path, err_src),
-                                origin,
-                            };
-                            eprintln!("{:?}", Into::<miette::Report>::into(err));
-                            are_constraints_satisfied = false;
-                        } else {
-                            continue;
-                        }
-                    }
                     HirGenericConstraintKind::Std { name: _, span } => {
                         //Other std constraints not implemented yet
                         let origin_path = declaration_span.path;
@@ -284,7 +258,7 @@ impl<'hir> HirGenericPool<'hir> {
     }
 
     /// This is currently the only generic constraint supported.
-    /// Checks if a type implements `std::copyable` e.g. If it's a primitive type or a struct that has a copy constructor defined.
+    /// Checks if a type implements `std::copyable` e.g. If it's a primitive type or TBD.
     pub fn implements_std_copyable(
         &self,
         module: &HirModuleSignature<'hir>,
@@ -308,7 +282,7 @@ impl<'hir> HirGenericPool<'hir> {
             HirTy::Slice(_) => true,
             HirTy::Named(n) => match module.structs.get(n.name) {
                 Some(struct_sig) => {
-                    struct_sig.copy_constructor.is_some()
+                    todo!("Implement a std::trivially_copyable detection")
                 },
                 None => {
                     false
@@ -318,44 +292,7 @@ impl<'hir> HirGenericPool<'hir> {
                 let name = MonomorphizationPass::generate_mangled_name(self.arena, g, "struct");
                 match module.structs.get(name) {
                     Some(struct_sig) => {
-                        struct_sig.copy_constructor.is_some()
-                    },
-                    None => {
-                        false
-                    }
-                }
-            }
-            _ => false,
-        }
-    }
-
-    fn implements_std_moveable(&self, module: &HirModuleSignature<'hir>, ty: &HirTy<'hir>) -> bool {
-        match ty {
-            // For now we consider all primitive types as moveable
-            HirTy::Boolean(_)
-            | HirTy::Integer(_)
-            | HirTy::Float(_)
-            | HirTy::Char(_)
-            | HirTy::String(_)
-            | HirTy::UnsignedInteger(_)
-            | HirTy::PtrTy(_)
-            // Function pointers are moveable
-            | HirTy::Function(_) => true,
-            // For now we consider lists as moveable until we have a better way to handle them
-            HirTy::Slice(_l) => true /*self.implements_std_moveable(module, l.inner)*/,
-            HirTy::Named(n) => match module.structs.get(n.name) {
-                Some(struct_sig) => {
-                    struct_sig.move_constructor.is_some()
-                },
-                None => {
-                    false
-                },
-            },
-            HirTy::Generic(g) => {
-                let name = MonomorphizationPass::generate_mangled_name(self.arena, g, "struct");
-                match module.structs.get(name) {
-                    Some(struct_sig) => {
-                        struct_sig.move_constructor.is_some()
+                        todo!("Implement a std::trivially_copyable detection")
                     },
                     None => {
                         false

@@ -238,8 +238,6 @@ pub enum TokenKind {
     KwOperator,
     #[token("class")]
     KwClass,
-    #[token("new")]
-    KwNew,
     #[token("delete")]
     KwDelete,
     #[token("fun")]

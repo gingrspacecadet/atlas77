@@ -42,18 +42,10 @@ pub struct HirStructSignature<'hir> {
     /// This is enough to know if the class implement them or not
     pub operators: Vec<HirBinaryOperator>,
     pub constants: BTreeMap<&'hir str, &'hir HirStructConstantSignature<'hir>>,
-    pub constructor: HirStructConstructorSignature<'hir>,
-    pub copy_constructor: Option<HirStructConstructorSignature<'hir>>,
-    pub move_constructor: Option<HirStructConstructorSignature<'hir>>,
-    pub default_constructor: Option<HirStructConstructorSignature<'hir>>,
-    /// THERE IS a destructor in this option. It's only used, because compiler
-    /// generated destructors are made at the end of the syntax lowering pass.
-    pub destructor: Option<HirStructConstructorSignature<'hir>>,
-    pub had_user_defined_constructor: bool,
+    /// This optional is always Some() after the syntax lowering pass.
+    /// It's only optional, because at the beginning of the pass, the destructor might not exist yet
+    pub destructor: Option<HirStructDestructorSignature<'hir>>,
     pub had_user_defined_destructor: bool,
-    pub had_user_defined_copy_constructor: bool,
-    pub had_user_defined_move_constructor: bool,
-    pub had_user_defined_default_constructor: bool,
     pub is_instantiated: bool,
     pub docstring: Option<&'hir str>,
     pub is_extern: bool,
@@ -164,15 +156,10 @@ impl HirFlag {
 
 #[derive(Debug, Clone)]
 //Also used for the destructor
-pub struct HirStructConstructorSignature<'hir> {
+pub struct HirStructDestructorSignature<'hir> {
     pub span: Span,
-    pub params: Vec<HirFunctionParameterSignature<'hir>>,
-    pub type_params: Vec<HirTypeParameterItemSignature<'hir>>,
     pub vis: HirVisibility,
     pub where_clause: Option<Vec<&'hir HirGenericConstraint<'hir>>>,
-    /// Whether the constructor's where_clause constraints are satisfied by the concrete types.
-    /// Only used for copy constructors. Set to false during monomorphization if constraints aren't met.
-    pub is_constraint_satisfied: bool,
     pub docstring: Option<&'hir str>,
 }
 

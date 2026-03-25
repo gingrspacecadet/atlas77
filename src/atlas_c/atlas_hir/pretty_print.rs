@@ -10,7 +10,7 @@ use crate::atlas_c::atlas_hir::{
 use super::{
     HirModule, HirModuleBody,
     expr::*,
-    item::{HirEnum, HirFunction, HirImport, HirStruct, HirStructConstructor, HirStructMethod},
+    item::{HirEnum, HirFunction, HirImport, HirStruct, HirStructDestructor, HirStructMethod},
     signature::{HirFunctionSignature, HirStructFieldSignature, HirVisibility},
     stmt::*,
     ty::HirTy,
@@ -161,27 +161,10 @@ impl HirPrettyPrinter {
             self.writeln("");
         }
 
-        // Constructor
-        self.writeln("// Constructor");
-        self.print_constructor(&struct_name, &struct_def.constructor);
-        self.writeln("");
-
-        if let Some(copy_ctor) = &struct_def.copy_constructor {
-            self.writeln("// Copy Constructor");
-            self.print_constructor(&struct_name, copy_ctor);
-            self.writeln("");
-        }
-
-        if let Some(move_ctor) = &struct_def.move_constructor {
-            self.writeln("// Move Constructor");
-            self.print_constructor(&struct_name, move_ctor);
-            self.writeln("");
-        }
-
         // Destructor
         if let Some(destructor) = &struct_def.destructor {
             self.writeln("// Destructor");
-            self.print_constructor(&format!("~{}", struct_name), destructor);
+            self.print_destructor(&struct_name, destructor);
             self.writeln("");
         }
 
@@ -202,23 +185,12 @@ impl HirPrettyPrinter {
         self.writeln(&format!("{}: {};", field.name, Self::type_str(field.ty)));
     }
 
-    fn print_constructor(&mut self, name: &str, constructor: &HirStructConstructor) {
+    fn print_destructor(&mut self, name: &str, dtor: &HirStructDestructor) {
         self.write_indent();
-        self.write(&format!(
-            "{} {}(",
-            self.visibility_str(constructor.vis),
-            name
-        ));
-
-        for (i, param) in constructor.params.iter().enumerate() {
-            if i > 0 {
-                self.write(", ");
-            }
-            self.write(&format!("{}: {}", param.name, Self::type_str(param.ty)));
-        }
+        self.write(&format!("~{} {}(", self.visibility_str(dtor.vis), name));
 
         self.write(")");
-        if let Some(where_clause) = &constructor.signature.where_clause {
+        if let Some(where_clause) = &dtor.signature.where_clause {
             self.write("\n");
             self.indent();
             self.write_indent();
@@ -229,7 +201,7 @@ impl HirPrettyPrinter {
         self.write_indent();
         self.write("{\n");
         self.indent();
-        self.print_block(&constructor.body);
+        self.print_block(&dtor.body);
         self.dedent();
         self.writeln("}");
     }
@@ -575,25 +547,6 @@ impl HirPrettyPrinter {
                 }
                 self.write("]");
             }
-            HirExpr::NewArray(new_array) => {
-                let ty = match new_array.ty {
-                    HirTy::InlineArray(l) => l.inner,
-                    _ => panic!("NewArray must have InlineArray type"),
-                };
-                self.write(&format!("new [{}; ", Self::type_str(ty)));
-                self.print_expr(&new_array.size);
-                self.write("]");
-            }
-            HirExpr::NewObj(new_obj) => {
-                self.write(&format!("new {}(", Self::type_str(new_obj.ty)));
-                for (i, arg) in new_obj.args.iter().enumerate() {
-                    if i > 0 {
-                        self.write(", ");
-                    }
-                    self.print_expr(arg);
-                }
-                self.write(")");
-            }
             HirExpr::ObjLiteral(obj_lit) => {
                 self.write(&format!("{} {{\n", Self::type_str(obj_lit.ty)));
                 self.indent();
@@ -620,11 +573,6 @@ impl HirPrettyPrinter {
                     Self::type_str(static_access.target),
                     static_access.field.name
                 ));
-            }
-            HirExpr::Copy(copy_expr) => {
-                self.write("copy<>(");
-                self.print_expr(&copy_expr.expr);
-                self.write(")");
             }
             HirExpr::IntrinsicCall(intrinsic) => {
                 self.write(&intrinsic.name);

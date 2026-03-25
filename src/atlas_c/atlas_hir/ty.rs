@@ -250,8 +250,8 @@ impl HirTy<'_> {
         }
         match self {
             HirTy::Named(named_ty) => {
-                if let Some(struct_sig) = signatures.structs.get(named_ty.name) {
-                    struct_sig.copy_constructor.is_some()
+                if let Some(_) = signatures.structs.get(named_ty.name) {
+                    todo!("Implement a std::trivially_copyable detection")
                 } else {
                     false
                 }
@@ -259,40 +259,13 @@ impl HirTy<'_> {
             HirTy::Generic(generic_ty) => {
                 // No need to monomorphize the name. This is ready for the next rework of the passes.
                 // The monomorphization pass will happen AFTER the type checking pass in the future.
-                if let Some(struct_sig) = signatures.structs.get(generic_ty.name) {
-                    struct_sig.copy_constructor.is_some()
+                if let Some(_) = signatures.structs.get(generic_ty.name) {
+                    todo!("Implement a std::trivially_copyable detection")
                 } else {
                     false
                 }
             }
             // Pointers are trivially copyable (they're just addresses)
-            HirTy::PtrTy(_) => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_moveable(&self, signatures: &HirModuleSignature<'_>) -> bool {
-        if self.is_primitive() {
-            return true;
-        }
-        match self {
-            HirTy::Named(named_ty) => {
-                if let Some(struct_sig) = signatures.structs.get(named_ty.name) {
-                    struct_sig.move_constructor.is_some()
-                } else {
-                    false
-                }
-            }
-            HirTy::Generic(generic_ty) => {
-                // No need to monomorphize the name. This is ready for the next rework of the passes.
-                // The monomorphization pass will happen AFTER the type checking pass in the future.
-                if let Some(struct_sig) = signatures.structs.get(generic_ty.name) {
-                    struct_sig.move_constructor.is_some()
-                } else {
-                    false
-                }
-            }
-            // Pointers are trivially moveable
             HirTy::PtrTy(_) => true,
             _ => false,
         }
@@ -427,11 +400,6 @@ impl fmt::Display for HirTy<'_> {
 }
 
 /// A raw pointer type: *T (mutable) or *const T (immutable)
-///
-/// TEMPORARY DESIGN (v0.8.0 MVP): References will be added back in v0.9+
-/// with proper lifetime tracking. Current constructor signatures use pointers:
-///   - Copy constructor: Foo(from: *const Foo)
-///   - Move constructor: Foo(from: *Foo)
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct HirPtrTy<'hir> {
     pub inner: &'hir HirTy<'hir>,

@@ -41,7 +41,7 @@ public:
         this->has_value = dying_obj->has_value;
         if (this->has_value)
         {
-            this->storage.value = move<T>(&dying_obj->storage.value);
+            this->storage.value = move_t<T>(&dying_obj->storage.value);
             dying_obj->has_value = false;
         }
         else
@@ -99,7 +99,7 @@ public:
 }
 
 
-fun move<T: std::moveable>(from: *T) -> T
+fun move_t<T>(from: *T) -> T
 {
     return T::__move_ctor(from);
 }
@@ -128,12 +128,8 @@ fun main()
     let opt1 = optional<Test>::of(Test(42));
     printf("opt1 has value: %d\n", opt1.has_value());
     printf("opt1 value: %ld\n", opt1.value().value);
-    printf("opt1 has value after move: %d\n", opt1.has_value());
+    printf("opt1 has value after move_t: %d\n", opt1.has_value());
 
     let opt2 = optional<Test>::empty();
     printf("opt2 is empty: %d\n", opt2.is_empty());
-
-    let moved_opt2 = move<optional<Test>>(opt1);
-    printf("moved_opt2 has value: %d\n", moved_opt2.has_value());
-    printf("moved_opt2 value: %ld\n", moved_opt2.value().value);
 }

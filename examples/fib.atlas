@@ -1,6 +1,19 @@
 extern fun printf<T>(fmt: string, n: T);
-extern fun timer_now_ns() -> uint64;
-extern fun timer_elapsed_s(start: uint64) -> float64;
+extern fun atlas77_now_layout() -> atlas77_time_layout;
+fun timer_now_ns() -> uint64 {
+    let t = atlas77_now_layout();
+    return t.sec * 1000000000 + t.nsec;
+}
+fun timer_elapsed_s(start_ns: uint64) -> float64 {
+    let now_ns = timer_now_ns();
+    return (now_ns - start_ns) as float64 / 1000000000.0;
+}
+
+extern struct atlas77_time_layout {
+public:
+    sec: uint64;
+    nsec: uint64;
+}
 
 fun fib(n: int64) -> int64 {
     if n <= 1 {
@@ -15,44 +28,4 @@ fun main() {
     printf("%ld\n", fib(40));
     let elapsed = timer_elapsed_s(start_time);
     printf("%f\n", elapsed);
-    let t = 0;
-    ptr_test(&t);
-
-    let foo: Foo = Foo::__ctor(45);
-    printf("foo.i = %ld\n", foo.i);
-    let copied_from_foo = foo;
-    printf("copied_from_foo.i = %ld\n", copied_from_foo.i);
-    let moved_from_foo = move<Foo>(foo);
-    printf("moved_from_foo.i = %ld\n", moved_from_foo.i);
-    printf("original_foo.i = %ld\n", foo.i);
-}
-
-struct Foo
-{
-public:
-    i: int64;
-    Foo()
-    {
-        this.i = 42;
-    }
-    Foo(dying_obj: *Foo)
-    {
-        this->i = dying_obj->i;
-        dying_obj->i = 0;
-    }
-    Foo(from: *const Foo)
-    {
-        this->i = 512;
-    }
-}
-
-fun ptr_test(t: *int64)
-{
-    *t = 42;
-    printf("%ld\n", *t);
-}
-
-fun move<T: std::moveable>(from: *T) -> T
-{
-    return T::__move_ctor(from);
 }

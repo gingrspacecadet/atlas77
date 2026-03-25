@@ -14,13 +14,12 @@ declare_error_type! {
     pub enum SyntaxError {
         UnexpectedEndOfFile(UnexpectedEndOfFileError),
         UnexpectedToken(UnexpectedTokenError),
-        OnlyOneConstructorAllowed(OnlyOneConstructorAllowedError),
+        OnlyOneDestructorAllowed(OnlyOneDestructorAllowedError),
         NoFieldInStruct(NoFieldInStructError),
         InvalidCharacter(InvalidCharacterError),
         DestructorWithParameters(DestructorWithParametersError),
         FlagDoesntExist(FlagDoesntExistError),
         SizeOfArrayMustBeKnownAtCompileTime(SizeOfArrayMustBeKnownAtCompileTimeError),
-        MutableSelfReferenceConstructor(MutableSelfReferenceConstructorError),
         ConstTypeNotSupportedYet(ConstTypeNotSupportedYetError),
         MissPlacedComment(MissPlacedCommentError),
     }
@@ -97,18 +96,12 @@ pub struct NoFieldInStructError {
 }
 
 #[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
-    code(syntax::only_one_constructor_allowed),
-    help(
-        "Try removing that constructor/destructor or make it a static method (e.g. `fun init(...) -> Self)`"
-    )
-)]
-#[error("Only one constructor or destructor is allowed per struct")]
-//This should also have a label pointing to the 1st constructor/destructor
-pub struct OnlyOneConstructorAllowedError {
-    #[label = "only one {kind} is allowed per struct"]
+#[diagnostic(code(syntax::only_one_destructor_allowed))]
+#[error("Only one destructor is allowed per struct")]
+//This should also have a label pointing to the 1st destructor
+pub struct OnlyOneDestructorAllowedError {
+    #[label = "only one destructor is allowed per struct"]
     pub span: Span,
-    pub kind: String,
     #[source_code]
     pub src: NamedSource<String>,
 }
@@ -160,20 +153,4 @@ pub struct SizeOfArrayMustBeKnownAtCompileTimeError {
     pub src: NamedSource<String>,
     #[label("size of array must be known at compile time")]
     pub span: Span,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
-    code(syntax::mutable_self_reference_constructor),
-    help(
-        "Use 'const {struct_name}&' for a copy constructor or '{struct_name}&&' for a move constructor"
-    )
-)]
-#[error("constructor cannot take a mutable reference to itself")]
-pub struct MutableSelfReferenceConstructorError {
-    #[source_code]
-    pub src: NamedSource<String>,
-    #[label("constructor cannot take a mutable reference to the same type")]
-    pub span: Span,
-    pub struct_name: String,
 }

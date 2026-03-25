@@ -73,6 +73,9 @@ impl CCodeGen {
             );
         }
         for strukt in program.structs.iter() {
+            if strukt.is_extern {
+                continue;
+            }
             Self::write_to_top(
                 &mut self.c_header,
                 &format!("typedef struct {} {};", strukt.name, strukt.name),

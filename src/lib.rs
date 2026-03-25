@@ -22,8 +22,7 @@ pub mod tcc;
 use crate::atlas_c::{
     atlas_codegen::{CCodeGen, HEADER_NAME},
     atlas_hir::{
-        dead_code_elimination_pass::DeadCodeEliminationPass, ownership_pass::OwnershipPass,
-        pretty_print::HirPrettyPrinter,
+        dead_code_elimination_pass::DeadCodeEliminationPass, pretty_print::HirPrettyPrinter,
     },
     atlas_lir::hir_lowering_pass::HirLoweringPass,
 };
@@ -370,25 +369,7 @@ pub fn build(
 
     //type-check
     let mut type_checker = TypeChecker::new(&hir_arena);
-    let hir = type_checker.check(hir)?;
-
-    // Ownership analysis pass (MOVE/COPY semantics and destructor insertion)
-    // Implements memory safety through:
-    // - Type-based classification (Trivial/Resource/View)
-    // - Strict reference lifetime tracking (compile errors on use-after-free)
-    // - Explicit move semantics (warnings on use-after-move)
-    let mut ownership_pass = OwnershipPass::new(hir.signature.clone(), &hir_arena);
-    let mut hir = match ownership_pass.run(hir) {
-        Ok(hir) => hir,
-        Err((hir, err)) => {
-            // Write HIR output (even if there are ownership errors)
-            let mut hir_printer = HirPrettyPrinter::new();
-            let hir_output = hir_printer.print_module(hir, "Ownership Pass");
-            let mut file_hir = std::fs::File::create("./build/output.atlas").unwrap();
-            file_hir.write_all(hir_output.as_bytes()).unwrap();
-            return Err((err).into());
-        }
-    };
+    let mut hir = type_checker.check(hir)?;
 
     //Dead code elimination (only in release mode)
     let mut dce_pass = DeadCodeEliminationPass::new(&hir_arena);

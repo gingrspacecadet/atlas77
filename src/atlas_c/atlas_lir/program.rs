@@ -347,15 +347,13 @@ pub enum LirInstr {
     },
     /// Construct a value of the given type in local storage,
     /// then call the constructor on it.
+    #[deprecated(note = "Will need to be reviewed to remove the `ctor_kind` field. \
+        It should just be a normal struct initialization")]
     Construct {
         ty: LirTy,
         dst: LirOperand,
         args: Vec<LirOperand>,
-        /// Can be:
-        /// __ctor
-        /// __copy_ctor
-        /// __move_ctor
-        /// __default_ctor
+        #[deprecated(note = "There are no constructors anymore")]
         ctor_kind: String,
     },
     HeapAllocCopy {
