@@ -13,3 +13,8 @@ public fun copy<T: std::copyable>(from: *const T) -> T
 {
     return T::__copy_ctor(from);
 }
+
+#[std::intrinsic]
+public extern fun size_of<T>() -> uint64;
+#[std::intrinsic]
+public extern fun align_of<T>() -> uint64;

@@ -1,95 +1,96 @@
 // I still need to have the "raylib.h" header file and some kind of small build system to actually compile against raylib.
 // Right now I just wanna do some stupid test.
 
-#[std::copyable]
-/* extern */ struct Vector2
+struct Vector2
 {
-private:
+public:
     x: float32;
     y: float32;
-public:
-    Vector2(x: float32, y: float32)
+    fun new(x: float32, y: float32) -> Vector2
     {
-        this->x = x;
-        this->y = y;
+        return Vector2 { .x = x, .y = y };
     }
-    Vector2(from: *const Vector2)
+    fun default() -> Vector2
     {
-        this->x = from->x;
-        this->y = from->y;
+        return Vector2 { .x = 0.0, .y = 0.0 };
     }
-    // The move constructor is equivalent to the copy constructor in this case since Vector2 only contains primitive types.
-    Vector2(dying_obj: *Vector2)
+    fun copy(*const this) -> Vector2
     {
-        this->x = dying_obj->x;
-        this->y = dying_obj->y;
+        return Vector2 { .x = this->x, .y = this->y };
     }
 }
 
-#[std::copyable]
-/* extern */ struct Vector3
+struct Vector3
 {
-private:
+public:
     x: float32;
     y: float32;
     z: float32;
-public:
-    Vector3(x: float32, y: float32, z: float32)
+    fun new(x: float32, y: float32, z: float32) -> Vector3
     {
-        this->x = x;
-        this->y = y;
-        this->z = z;
+        return Vector3 { .x = x, .y = y, .z = z };
     }
-    Vector3(from: *const Vector3)
+    fun default() -> Vector3
     {
-        this->x = from->x;
-        this->y = from->y;
-        this->z = from->z;
+        return Vector3 { .x = 0.0, .y = 0.0, .z = 0.0 };
     }
-    // The move constructor is equivalent to the copy constructor in this case since Vector3 only contains primitive types.
-    Vector3(dying_obj: *Vector3)
+    fun copy(*const this) -> Vector3
     {
-        this->x = dying_obj->x;
-        this->y = dying_obj->y;
-        this->z = dying_obj->z;
+        return Vector3 { .x = this->x, .y = this->y, .z = this->z };
     }
 }
 
-#[std::copyable]
-/* extern */ struct Color {
+struct TestStruct
+{
+    a: int32;
+    b: float32;
+    c: Vector2;
+    d: Vector3;
+    fun new(a: int32, b: float32, c: Vector2, d: Vector3) -> TestStruct
+    {
+        return TestStruct { .a = a, .b = b, .c = c, .d = d };
+    }
+}
+
+struct Color {
 public:
     r: uint8;
     g: uint8;
     b: uint8;
     a: uint8;
 public:
-    Color(r: uint8, g: uint8, b: uint8, a: uint8)
+    fun new(r: uint8, g: uint8, b: uint8, a: uint8) -> Color
     {
-        this->r = r;
-        this->g = g;
-        this->b = b;
-        this->a = a;
+        return Color { .r = r, .g = g, .b = b, .a = a };
+    }
+    fun default() -> Color
+    {
+        return Color { .r = 0, .g = 0, .b = 0, .a = 255 };
+    }
+    fun copy(*const this) -> Color
+    {
+        return Color { .r = this->r, .g = this->g, .b = this->b, .a = this->a };
     }
     // I still don't have global variables/constants. So I am just using static methods to return the common colors for now. This is not ideal, but it works for demonstration purposes.
     fun RED() -> Color
     {
-        return Color(255, 0, 0, 255);
+        return Color::new(255, 0, 0, 255);
     }
     fun GREEN() -> Color
     {
-        return Color(0, 255, 0, 255);
+        return Color::new(0, 255, 0, 255);
     }
     fun BLUE() -> Color
     {
-        return Color(0, 0, 255, 255);
+        return Color::new(0, 0, 255, 255);
     }
     fun BLACK() -> Color
     {
-        return Color(0, 0, 0, 255);
+        return Color::new(0, 0, 0, 255);
     }
     fun WHITE() -> Color
     {
-        return Color(255, 255, 255, 255);
+        return Color::new(255, 255, 255, 255);
     }
 }
 
@@ -102,4 +103,13 @@ fun main() {
     printf(" g=%u", color.g);
     printf(" b=%u", color.b);
     printf(" a=%u\n", color.a);
+
+    let v2 = Vector2::new(1.0, 2.0);
+    printf("Vector2: x=%f", v2.x);
+    printf(" y=%f\n", v2.y);
+
+    let v3 = Vector3::new(1.0, 2.0, 3.0);
+    printf("Vector3: x=%f", v3.x);
+    printf(" y=%f", v3.y);
+    printf(" z=%f\n", v3.z);
 }

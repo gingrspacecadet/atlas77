@@ -379,11 +379,6 @@ impl<'hir> MonomorphizationPass<'hir> {
 
         if let Some(destructor) = new_struct.destructor.as_mut() {
             self.monomorphize_destructor(destructor, types_to_change.clone(), module)?;
-        } else {
-            unreachable!(
-                "Struct destructor missing during monomorphization for struct {}",
-                new_struct.signature.name
-            );
         }
 
         // Check and mark methods based on where_clause constraints

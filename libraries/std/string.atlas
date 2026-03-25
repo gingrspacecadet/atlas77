@@ -20,8 +20,8 @@ public extern fun atlas77_to_chars_impl(s: *const uint8) -> [uint8];
 
 
 import "std/memory";
+import "std/io";
 
-#[std::copyable]
 //! Bootiful String type
 public struct String {
 private:
@@ -30,53 +30,38 @@ private:
     capacity: uint64;
 
 public:
-    //! Creates a new empty `String` with a capacity of 1 (to hold the null terminator)
-    //! but with a len of 0 (since it's empty).
-    String()
+    fun default() -> String
     {
-        this->data = malloc<uint8>(1);
-        this->data[0] = '\0' as uint8;
-        this->len = 0;
-        this->capacity = 1;
-    }
-    //! Creates a new `String` by copying the provided string data into its own memory.
-    String(str: *uint8, len: uint64)
-    {
-        if (str == null) {
-            this->data = null;
-            this->len = 0;
-            this->capacity = 0;
-        } else {
-            // We take ownership of the string data, so we need to copy it into our own memory.
-            this->data = malloc<uint8>(len);
-            memcpy(this->data, str, len);
-            // We trim the null terminator
-            if this->data[len - 1] == '\0' as uint8 {
-                len = len - 1;
-            }
-            this->len      = len;
-            this->capacity = len;
-        }
-    }
-    //! Creates a new `String` by copying another `String`.
-    String(from: *const String)
-    {
-        this->data = malloc<uint8>(from->capacity);
-        memcpy(this->data, from->data, from->len);
+        let data = malloc<uint8>(0);
+        data[0] = '\0' as uint8;
 
-        this->len      = from->len;
-        this->capacity = from->capacity;
+        return String { 
+            .data = data, 
+            .len = 0, 
+            .capacity = 0 
+        };
     }
-    String(dying_obj: *String)
+    fun new() -> String
     {
-        this->data = dying_obj->data;
-        this->len = dying_obj->len;
-        this->capacity = dying_obj->capacity;
+        let data = malloc<uint8>(0);
+        data[0] = '\0' as uint8;
 
-        // We take ownership of the string data, so we need to null out the dying object's pointer to prevent double free.
-        dying_obj->data = null;
-        dying_obj->len = 0;
-        dying_obj->capacity = 0;
+        return String { 
+            .data = data, 
+            .len = 0, 
+            .capacity = 0 
+        };
+    }
+    fun copy(*const this) -> String
+    {
+        let new_data = malloc<uint8>(this->capacity);
+        memcpy(new_data, this->data, this->len);
+
+        return String { 
+            .data = new_data, 
+            .len = this->len, 
+            .capacity = this->capacity 
+        };
     }
     ~String()
     {
@@ -88,15 +73,24 @@ public:
     fun from_chars(str: *uint8) -> String
     {
         let len = strlen(str);
-        return String(str, len);
+        let data = malloc<uint8>(len);
+        memcpy(data, str, len);
+        return String { 
+            .data = data, 
+            .len = len, 
+            .capacity = len 
+        };
     }
     //! Creates a new `String` with the specified capacity, but with no data.
     fun with_capacity(capacity: uint64) -> String
     {
-        let str = String(null, 0);
-        str.data = malloc<uint8>(capacity);
-        str.capacity = capacity;
-        return str;
+        let data = malloc<uint8>(capacity);
+        data[0] = '\0' as uint8;
+        return String { 
+            .data = data, 
+            .len = 0, 
+            .capacity = capacity 
+        };
     }
     //! Returns the length of the string.
     fun len(*const this) -> uint64
@@ -111,8 +105,22 @@ public:
         this->len = new_len;
     }
     //! Returns a pointer to the string's data. Use with caution, as this can lead to undefined behavior if the string's invariants are violated.
-    fun data(*const this) -> *const uint8
+    fun c_str(*this) -> *const uint8
     {
+        if this->data == null {
+            return null;
+        } else if this->len < this->capacity {
+            this->data[this->len] = '\0' as uint8;
+        } 
+        // We need to reallocate to add a null terminator, since the string is currently at full capacity. This is a bit inefficient, but it ensures that we always return a null-terminated string.
+        let new_capacity = this->capacity + 1;
+        let new_data = malloc<uint8>(new_capacity);
+        memcpy(new_data, this->data, this->len);
+
+        new_data[this->len] = '\0' as uint8;
+        free(this->data);
+        this->data = new_data;
+        this->capacity = new_capacity;
         return this->data;
     }
     //! Returns a mutable pointer to the string's data. Use with caution, as this can lead to undefined behavior if the string's invariants are violated.
@@ -136,7 +144,6 @@ public:
         return this->data;
     }
     //! Returns a new `String` with leading and trailing whitespace removed.
-    //! [!Note] NOT TESTED YET - MAY BE BUGGY
     fun trim(*const this) -> String
     {
         let start: uint64 = 0;
@@ -147,13 +154,16 @@ public:
         while end > start && (this->data[end - 1] == ' ' as uint8 || this->data[end - 1] == '\t' as uint8 || this->data[end - 1] == '\n' as uint8) {
             end = end - 1;
         }
-        return String(this->data + start, end - start);
+        return String { 
+            .data = this->data + start, 
+            .len = end - start, 
+            .capacity = end - start 
+        };
     }
     //! Returns a new `String` converted to uppercase.
-    //! [!Note] NOT TESTED YET - MAY BE BUGGY
     fun to_upper(*const this) -> String
     {
-        let str = copy<String>(this);
+        let str = this->copy();
         let i: uint64 = 0;
         while i < this->len {
             let c = this->data[i];
@@ -163,10 +173,9 @@ public:
         return str;
     }
     //! Returns a new `String` converted to lowercase.
-    //! [!Note] NOT TESTED YET - MAY BE BUGGY
     fun to_lower(*const this) -> String
     {
-        let str = copy<String>(this);
+        let str = this->copy();
         let i: uint64 = 0;
         while i < this->len {
             let c = this->data[i];
@@ -182,22 +191,21 @@ public:
         let new_data: *uint8 = malloc<uint8>(new_len);
         memcpy(new_data, this->data, this->len);
         memcpy(new_data + this->len, other->data, other->len);
-        return String(new_data, new_len);
+        return String { 
+            .data = new_data, 
+            .len = new_len, 
+            .capacity = new_len 
+        };
     }
 }
-
-extern fun printf<T>(fmt: *const uint8, arg: T) -> int64;
 
 fun main()
 {
     let str: const String = String::from_chars("Hello World");
-    printf("Normal: %s\n", str.to_chars());
-    let str_ptr: *const String = &str;
-    printf("Pointer: %s\n", str_ptr->to_chars());
+    printf("Normal: %s\n", str.c_str());
+    let str_ptr: *String = &str;
+    printf("Pointer: %s\n", str_ptr->c_str());
 
     let concatenated = str.concat(&str);
-    printf("Concatenated: %s\n", concatenated.to_chars());
-
-    let upper = str.to_upper();
-    printf("Uppercase: %s\n", upper.to_chars());
+    printf("Concatenated: %s\n", concatenated.c_str());
 }

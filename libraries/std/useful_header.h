@@ -261,25 +261,6 @@ static inline void panic(const char *message)
 
 #include <ctype.h>
 
-/* Placeholder for split implementation; currently returns an unspecified value. */
-extern inline uint8_t *__atlas77_c_split(uint8_t *str, const uint8_t *separator)
-{
-}
-
-/* Lexicographically compares two Atlas77 string buffers like strcmp. */
-extern inline uint64_t __atlas77_c_str_cmp(const uint8_t *str_1, const uint8_t *str2)
-{
-    return strcmp((const char *)str_1, (const char *)str2);
-}
-
-/* NB: Returns a null terminated string */
-extern inline const uint8_t *atlas77_to_chars_impl(const uint8_t *s)
-{
-    // Later to_chars() will return a slice e.g. `[uint8]`
-    // And the string type will be a bit more defined
-    return (const uint8_t *)s;
-}
-
 #endif /* ATLAS77_NS_STRING */
 
 #ifndef ATLAS77_NS_VECTOR

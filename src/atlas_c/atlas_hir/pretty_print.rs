@@ -550,13 +550,12 @@ impl HirPrettyPrinter {
             HirExpr::ObjLiteral(obj_lit) => {
                 self.write(&format!("{} {{\n", Self::type_str(obj_lit.ty)));
                 self.indent();
-                for (i, field_init) in obj_lit.fields.iter().enumerate() {
+                for field_init in obj_lit.fields.iter() {
                     self.write_indent();
                     self.write(&format!(".{} = ", field_init.name));
                     self.print_expr(&field_init.value);
-                    if i > 0 {
-                        self.write(", ");
-                    }
+                    self.write(", ");
+                    
                     self.write("\n");
                 }
                 self.dedent();
