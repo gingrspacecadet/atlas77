@@ -28,7 +28,13 @@ use crate::atlas_c::{
             UnsupportedExpr, UnsupportedItemError, UselessError,
         },
         expr::{
-            HirBinaryOpExpr, HirBinaryOperator, HirBooleanLiteralExpr, HirCastExpr, HirCharLiteralExpr, HirDeleteExpr, HirExpr, HirFieldAccessExpr, HirFieldInit, HirFloatLiteralExpr, HirFunctionCallExpr, HirFunctionKind, HirIdentExpr, HirIndexingExpr, HirIntegerLiteralExpr, HirIntrinsicCallExpr, HirListLiteralExpr, HirListLiteralWithSizeExpr, HirNullLiteralExpr, HirObjLiteralExpr, HirStaticAccessExpr, HirStringLiteralExpr, HirThisLiteral, HirUnaryOp, HirUnitLiteralExpr, HirUnsignedIntegerLiteralExpr, UnaryOpExpr
+            HirBinaryOpExpr, HirBinaryOperator, HirBooleanLiteralExpr, HirCastExpr,
+            HirCharLiteralExpr, HirDeleteExpr, HirExpr, HirFieldAccessExpr, HirFieldInit,
+            HirFloatLiteralExpr, HirFunctionCallExpr, HirFunctionKind, HirIdentExpr,
+            HirIndexingExpr, HirIntegerLiteralExpr, HirIntrinsicCallExpr, HirListLiteralExpr,
+            HirListLiteralWithSizeExpr, HirNullLiteralExpr, HirObjLiteralExpr, HirStaticAccessExpr,
+            HirStringLiteralExpr, HirThisLiteral, HirUnaryOp, HirUnitLiteralExpr,
+            HirUnsignedIntegerLiteralExpr, UnaryOpExpr,
         },
         item::{
             HirEnum, HirEnumVariant, HirFunction, HirStruct, HirStructDestructor, HirStructMethod,
@@ -649,15 +655,6 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 AstMethodModifier::Static => HirStructMethodModifier::Static,
                 AstMethodModifier::Mutable => HirStructMethodModifier::Mutable,
                 AstMethodModifier::Consuming => HirStructMethodModifier::Consuming,
-                AstMethodModifier::Dying => {
-                    return Err(HirError::UselessError(UselessError {
-                        span: node.name.span,
-                        src: NamedSource::new(
-                            node.name.span.path,
-                            utils::get_file_content(node.name.span.path).unwrap(),
-                        ),
-                    }));
-                }
             },
             span: node.span,
             vis: node.vis.into(),
@@ -1245,7 +1242,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 for field in o.fields.iter_mut() {
                     let (mut field_temps, value) =
                         self.separate_temporaries(*field.value.clone(), false);
-                    field.value = Box::new(value);
+                    *field.value = value;
                     temps.append(&mut field_temps);
                 }
                 let rebuilt = HirExpr::ObjLiteral(o);
@@ -1433,7 +1430,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                     ));
                                 }
                                 //let ty = self.visit_ty(c.generics[0])?;
-                                let src_expr = self.visit_expr(&c.args[0])?;
+                                let src_expr = self.visit_expr(c.args[0])?;
                                 let hir = HirExpr::IntrinsicCall(HirIntrinsicCallExpr {
                                     name: "move",
                                     ty: src_expr.ty(),
@@ -1878,8 +1875,8 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             }
             AstType::Const(_) => {
                 let path = node.span().path;
-                let src =
-                    utils::get_file_content(path).expect(&format!("Failed to open file {path}"));
+                let src = utils::get_file_content(path)
+                    .unwrap_or_else(|_| panic!("Failed to open file {path}"));
                 return Err(HirError::UnknownType(UnknownTypeError {
                     name: node.name(),
                     span: node.span(),

@@ -247,11 +247,10 @@ impl<'hir> HirLoweringPass<'hir> {
         self.local_map.clear();
 
         self.param_map.insert("this", 0);
-        let mut args = Vec::new();
-        args.push(LirTy::Ptr {
+        let args = vec![LirTy::Ptr {
             is_const: false,
             inner: Box::new(LirTy::StructType(struct_name.to_string())),
-        });
+        }];
 
         // Initialize current function with entry block
         self.current_function = Some(LirFunction {
@@ -1014,7 +1013,7 @@ impl<'hir> HirLoweringPass<'hir> {
                             LirOperand::AsRef(Box::new(target_operand))
                         };
                         args.push(receiver);
-                    } else if let HirExpr::StaticAccess(static_access) = call.callee.as_ref() {
+                    } else if let HirExpr::StaticAccess(_) = call.callee.as_ref() {
                         for (idx, arg) in call.args.iter().enumerate() {
                             let lowered = self.lower_expr(arg)?;
                             let adjusted = if let Some(expected_ty) = call.args_ty.get(idx) {
@@ -1030,16 +1029,12 @@ impl<'hir> HirLoweringPass<'hir> {
                             };
                             args.push(adjusted);
                         }
-                        match static_access.field.name {
-                            _ => {
-                                return Err(unsupported_expr(
-                                    expr.span(),
-                                    String::from(
-                                        "There is no special static method taking an implicit \"this\" in the language yet",
-                                    ),
-                                ));
-                            }
-                        }
+                        return Err(unsupported_expr(
+                            expr.span(),
+                            String::from(
+                                "There is no special static method taking an implicit \"this\" in the language yet",
+                            ),
+                        ));
                     } else {
                         return Err(unsupported_expr(
                             expr.span(),

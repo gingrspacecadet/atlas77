@@ -2,7 +2,7 @@
 name = "atlas_77"
 version = "0.8.0"
 edition = "2024"
-description = "Wannabe systems programming language on a custom VM (for now)."
+description = "Wannabe systems programming language."
 authors = ["Gipson62"]
 license = "MIT"
 repository = "https://github.com/atlas77-lang/Atlas77"
@@ -28,7 +28,7 @@ codegen-units = 1
 doctest = false
 
 [[bin]]
-name = "atlas_77"
+name = "atlas77"
 path = "src/main.rs"
 
 [dependencies]

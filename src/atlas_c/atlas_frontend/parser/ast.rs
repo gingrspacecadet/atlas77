@@ -267,9 +267,6 @@ pub enum AstMethodModifier {
     ///
     /// e.g.: `fun push(*this, val: T) { ... }`
     Mutable,
-    /// this&&
-    #[deprecated(note = "References don't exist anymore. They'll be back in the 0.9")]
-    Dying,
     /// Method that consumes ownership of `this`
     ///
     /// e.g.: `fun into_iter(this) -> Iter<T> { ... }`

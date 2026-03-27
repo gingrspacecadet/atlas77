@@ -811,7 +811,13 @@ impl CCodeGen {
             }
             LirOperand::ImmUnit => "NULL".to_string(),
             LirOperand::Deref(d) => format!("(*{})", self.codegen_operand(d)),
-            LirOperand::AsRef(a) => format!("(&{})", self.codegen_operand(a)),
+            LirOperand::AsRef(a) => {
+                if let LirOperand::ImmUnit = **a {
+                    format!("({})", self.codegen_operand(a))
+                } else {
+                    format!("(&{})", self.codegen_operand(a))
+                }
+            }
             LirOperand::FieldAccess {
                 src,
                 field_name,

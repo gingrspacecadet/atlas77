@@ -130,9 +130,11 @@ impl HirError {
     }
 }
 
-
 #[derive(Error, Diagnostic, Debug)]
-#[diagnostic(code(sema::invalid_list_size), help("list size must be a non-negative and non-zero integer"))]
+#[diagnostic(
+    code(sema::invalid_list_size),
+    help("list size must be a non-negative and non-zero integer")
+)]
 #[error("invalid list size: {size}")]
 pub struct InvalidListSizeError {
     #[label = "list size must be a non-negative and non-zero integer"]
@@ -143,7 +145,10 @@ pub struct InvalidListSizeError {
 }
 
 #[derive(Error, Diagnostic, Debug)]
-#[diagnostic(code(sema::non_constant_list_size), help("Only literal integers can be used as list size for now"))]
+#[diagnostic(
+    code(sema::non_constant_list_size),
+    help("Only literal integers can be used as list size for now")
+)]
 #[error("list size must be a constant expression")]
 pub struct NonConstantListSizeError {
     #[label = "list size must be a constant expression"]

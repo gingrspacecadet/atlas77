@@ -14,11 +14,11 @@ use clap::Parser;
 #[derive(Parser)] // requires `derive` feature
 #[command(name = "Atlas77")]
 #[command(
-    bin_name = "atlas_77",
+    bin_name = "atlas77",
     author = "atlas77-lang",
     version("v0.8.0 Reforged"),
-    about = "Programming language made in Rust, a goofy cousin to C++. \nNB: The language is still in early development and is not stable yet, BEWARE.",
-    long_about = "Atlas77 is a programming language made in Rust. It is a statically typed language with a focus on being a goofy cousin to C++ and useful for me (Gipson62) at least. \n\nNB: The language is still in early development and is not stable yet, BEWARE."
+    about = "Programming language made in Rust, a goofy cousin to C++ and a modern version of C. \nNB: The language is still in early development and is not stable yet, BEWARE.",
+    long_about = "Atlas77 is a programming language made in Rust. It is a statically typed language with a focus on being a goofy cousin to C++ and a modern version of C and useful for me (Gipson62) at least. \n\nNB: The language is still in early development and is not stable yet, BEWARE."
 )]
 enum AtlasRuntimeCLI {
     #[command(

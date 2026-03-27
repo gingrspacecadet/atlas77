@@ -8,13 +8,14 @@ use miette::NamedSource;
 use crate::atlas_c::{
     atlas_frontend::parser::{
         ast::{
-            AstArg, AstEnum, AstEnumVariant, AstFlag, AstGlobalConst, AstInlineArrayType, AstListLiteralWithSize, AstNullLiteral, AstObjLiteralExpr, AstObjLiteralField, AstPtrTy, AstStdGenericConstraint, AstUnion
+            AstArg, AstEnum, AstEnumVariant, AstFlag, AstGlobalConst, AstInlineArrayType,
+            AstListLiteralWithSize, AstNullLiteral, AstObjLiteralExpr, AstObjLiteralField,
+            AstPtrTy, AstStdGenericConstraint, AstUnion,
         },
         error::{
             ConstTypeNotSupportedYetError, DestructorWithParametersError, FlagDoesntExistError,
             MissPlacedCommentError, NoFieldInStructError, OnlyOneDestructorAllowedError,
-            ParseResult, SizeOfArrayMustBeKnownAtCompileTimeError, SyntaxError,
-            UnexpectedTokenError,
+            ParseResult, SyntaxError, UnexpectedTokenError,
         },
     },
     utils,
@@ -287,7 +288,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::Comments(_) => {
                 let path = current_tok.span.path;
                 let src = utils::get_file_content(path)
-                    .expect(&format!("Failed to open file content {path}"));
+                    .unwrap_or_else(|_| panic!("Failed to open file content {path}"));
                 Err(Box::new(SyntaxError::MissPlacedComment(
                     MissPlacedCommentError {
                         span: current_tok.span,
@@ -1356,11 +1357,13 @@ impl<'ast> Parser<'ast> {
                     let _ = self.advance();
                     let length_expr = self.parse_expr()?;
                     self.expect(TokenKind::RBracket)?;
-                    return Ok(AstExpr::Literal(AstLiteral::ListWithSize(AstListLiteralWithSize {
-                        span: Span::union_span(&start.span(), &self.current().span()),
-                        item: self.arena.alloc(first_element.unwrap()),
-                        size: self.arena.alloc(length_expr),
-                    })));
+                    return Ok(AstExpr::Literal(AstLiteral::ListWithSize(
+                        AstListLiteralWithSize {
+                            span: Span::union_span(&start.span(), &self.current().span()),
+                            item: self.arena.alloc(first_element.unwrap()),
+                            size: self.arena.alloc(length_expr),
+                        },
+                    )));
                 } else {
                     // Normal list literal like `[1, 2, 3]`
                     if let Some(expr) = first_element {
@@ -2020,18 +2023,17 @@ impl<'ast> Parser<'ast> {
         &mut self,
         target: AstExpr<'ast>,
     ) -> ParseResult<AstFieldAccessExpr<'ast>> {
-        let is_arrow;
         let tok = self.advance();
-        match tok.kind {
-            TokenKind::Dot => is_arrow = false,
-            TokenKind::RArrow => is_arrow = true,
+        let is_arrow = match tok.kind {
+            TokenKind::Dot => false,
+            TokenKind::RArrow => true,
             _ => {
                 return Err(self.unexpected_token_error(
                     TokenVec(vec![TokenKind::RArrow, TokenKind::Dot]),
                     &tok.span,
                 ));
             }
-        }
+        };
 
         let field = self.parse_identifier()?;
 
@@ -2283,7 +2285,7 @@ impl<'ast> Parser<'ast> {
                     ty: format!("const {}", non_const_ty),
                     src: NamedSource::new(path, src),
                 };
-                eprintln!("{:?}", Into::<miette::ErrReport>::into(warning));
+                eprintln!("{:?}", Into::<miette::Report>::into(warning));
                 return Ok(non_const_ty);
             }
             _ => {
@@ -2311,20 +2313,9 @@ impl<'ast> Parser<'ast> {
         Ok(node)
     }
 
-    fn unknown_array_size_error(&self, span: &Span) -> Box<SyntaxError> {
-        let path = span.path;
-        let src = get_file_content(path).expect("Failed to read source file");
-        Box::new(SyntaxError::SizeOfArrayMustBeKnownAtCompileTime(
-            SizeOfArrayMustBeKnownAtCompileTimeError {
-                span: *span,
-                src: NamedSource::new(path, src),
-            },
-        ))
-    }
-
     fn unexpected_token_error(&self, expected: TokenVec, span: &Span) -> Box<SyntaxError> {
         let path = span.path;
-        let src = get_file_content(path).expect(&format!("Failed to read source file: {path}"));
+        let src = get_file_content(path).unwrap_or_else(|_| panic!("Failed to open file {path}"));
         Box::new(SyntaxError::UnexpectedToken(UnexpectedTokenError {
             token: self.current().clone(),
             expected,

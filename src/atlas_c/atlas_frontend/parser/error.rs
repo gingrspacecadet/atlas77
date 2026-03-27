@@ -30,6 +30,7 @@ pub type ParseResult<T> = Result<T, Box<SyntaxError>>;
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(
     code(syntax::cannot_end_with_comment),
+    severity(warning),
     help("Remove this trailing comment (or add a declaration under it)")
 )]
 #[error(

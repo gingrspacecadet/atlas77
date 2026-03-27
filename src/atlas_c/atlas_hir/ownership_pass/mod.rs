@@ -272,12 +272,22 @@ impl<'hir> HirOwnershipPass<'hir> {
                 .get(named.name)
                 .is_some_and(|sig| sig.destructor.is_some()),
             HirTy::Generic(generic) => {
-                let sig = self.signature.structs.get(generic.name).copied().or_else(|| {
-                    self.signature.structs.values().find(|sig| {
-                        sig.pre_mangled_ty
-                            .is_some_and(|pre| pre.name == generic.name && pre.inner == generic.inner)
-                    }).copied()
-                });
+                let sig = self
+                    .signature
+                    .structs
+                    .get(generic.name)
+                    .copied()
+                    .or_else(|| {
+                        self.signature
+                            .structs
+                            .values()
+                            .find(|sig| {
+                                sig.pre_mangled_ty.is_some_and(|pre| {
+                                    pre.name == generic.name && pre.inner == generic.inner
+                                })
+                            })
+                            .copied()
+                    });
                 sig.is_some_and(|sig| sig.destructor.is_some())
             }
             HirTy::InlineArray(arr) => self.should_auto_delete(arr.inner),
@@ -311,12 +321,22 @@ impl<'hir> HirOwnershipPass<'hir> {
                 .get(named.name)
                 .is_some_and(|sig| sig.is_trivially_copyable),
             HirTy::Generic(generic) => {
-                let sig = self.signature.structs.get(generic.name).copied().or_else(|| {
-                    self.signature.structs.values().find(|sig| {
-                        sig.pre_mangled_ty
-                            .is_some_and(|pre| pre.name == generic.name && pre.inner == generic.inner)
-                    }).copied()
-                });
+                let sig = self
+                    .signature
+                    .structs
+                    .get(generic.name)
+                    .copied()
+                    .or_else(|| {
+                        self.signature
+                            .structs
+                            .values()
+                            .find(|sig| {
+                                sig.pre_mangled_ty.is_some_and(|pre| {
+                                    pre.name == generic.name && pre.inner == generic.inner
+                                })
+                            })
+                            .copied()
+                    });
                 sig.is_some_and(|sig| sig.is_trivially_copyable)
             }
             _ => false,
@@ -512,7 +532,6 @@ impl<'hir> HirOwnershipPass<'hir> {
                         None,
                     ));
                 }
-                
             }
             HirExpr::ObjLiteral(obj) => {
                 for field in &obj.fields {

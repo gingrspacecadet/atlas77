@@ -6,9 +6,6 @@ use super::{
     expr,
     stmt::{HirBlock, HirExprStmt, HirStatement},
 };
-use crate::atlas_c::atlas_hir::{error::{
-    AccessingPrivateUnionError, CallingConsumingMethodOnMutableReferenceError, CallingConsumingMethodOnMutableReferenceOrigin, CannotAccessFieldOfPointersError, InvalidListSizeError, ListIndexOutOfBoundsError, NonConstantListSizeError, StructCannotHaveAFieldOfItsOwnTypeError, TypeIsNotCopyableError, UnionMustHaveAtLeastTwoVariantError, UnionVariantDefinedMultipleTimesError, VariableNameAlreadyDefinedError
-}, warning::NonTriviallyCopyableStructHoldsARawPointerWithNoCustomDestructorWarning};
 use crate::atlas_c::atlas_hir::item::{HirStructDestructor, HirUnion};
 use crate::atlas_c::atlas_hir::pretty_print::HirPrettyPrinter;
 use crate::atlas_c::atlas_hir::signature::{
@@ -40,6 +37,17 @@ use crate::atlas_c::atlas_hir::{
     ty::{HirGenericTy, HirNamedTy, HirTy, HirTyId},
     type_check_pass::context::{ContextFunction, ContextVariable},
     warning::{HirWarning, TryingToCastToTheSameTypeWarning},
+};
+use crate::atlas_c::atlas_hir::{
+    error::{
+        AccessingPrivateUnionError, CallingConsumingMethodOnMutableReferenceError,
+        CallingConsumingMethodOnMutableReferenceOrigin, CannotAccessFieldOfPointersError,
+        InvalidListSizeError, ListIndexOutOfBoundsError, NonConstantListSizeError,
+        StructCannotHaveAFieldOfItsOwnTypeError, TypeIsNotCopyableError,
+        UnionMustHaveAtLeastTwoVariantError, UnionVariantDefinedMultipleTimesError,
+        VariableNameAlreadyDefinedError,
+    },
+    warning::UnsafeRawPointerStructWarning,
 };
 use crate::atlas_c::utils;
 use crate::atlas_c::utils::Span;
@@ -364,13 +372,17 @@ impl<'hir> TypeChecker<'hir> {
         }
 
         // Warn when a struct owns raw pointers but is not trivially copyable and has no custom destructor.
-        if !class.signature.flag.is_trivially_copyable() && !class.signature.had_user_defined_destructor {
-            if let Some(pointer_field) = class.fields.iter().find(|field| matches!(field.ty, HirTy::PtrTy(_))) {
-                Self::non_trivially_copyable_struct_holds_a_raw_pointer_with_no_custom_destructor_warning(
+        if !class.signature.flag.is_trivially_copyable()
+            && !class.signature.had_user_defined_destructor
+            && let Some(pointer_field) = class
+                .fields
+                .iter()
+                .find(|field| matches!(field.ty, HirTy::PtrTy(_)))
+        {
+            Self::non_trivially_copyable_struct_holds_a_raw_pointer_with_no_custom_destructor_warning(
                     class,
                     pointer_field.span,
                 );
-            }
         }
 
         for method in &mut class.methods {
@@ -710,8 +722,17 @@ impl<'hir> TypeChecker<'hir> {
                 // This catches: `*const_ref = value`
                 if let HirExpr::Unary(unary_expr) = &assign.dst
                     && let Some(HirUnaryOp::Deref) = &unary_expr.op
+                    && self.is_const_ptr_ty(unary_expr.expr.ty())
                 {
-                    self.check_expr(&mut unary_expr.expr.clone())?;
+                    let path = assign.span.path;
+                    let src = utils::get_file_content(path).unwrap();
+                    return Err(HirError::TryingToMutateConstPointer(
+                        TryingToMutateConstPointerError {
+                            span: assign.span,
+                            ty: dst_ty.to_string(),
+                            src: NamedSource::new(path, src),
+                        },
+                    ));
                 }
                 assign.ty = dst_ty;
 
@@ -784,7 +805,7 @@ impl<'hir> TypeChecker<'hir> {
                 if dtor.vis != HirVisibility::Public {
                     Err(Self::accessing_private_destructor_err(
                         &del_expr.span,
-                        &format!("{}", class.name),
+                        class.name,
                     ))
                 } else {
                     Ok(self.arena.types().get_unit_ty())
@@ -1737,20 +1758,11 @@ impl<'hir> TypeChecker<'hir> {
 
                             Ok(func_expr.ty)
                         } else {
-                            match static_access.field.name {
-                                "__dtor" => {
-                                    return Err(Self::unknown_method_err(
-                                        static_access.field.name,
-                                        static_access.field.name,
-                                        &static_access.span,
-                                    ));
-                                }
-                                _ => Err(Self::unknown_method_err(
-                                    static_access.field.name,
-                                    name,
-                                    &static_access.span,
-                                )),
-                            }
+                            Err(Self::unknown_method_err(
+                                static_access.field.name,
+                                name,
+                                &static_access.span,
+                            ))
                         }
                     }
                     _ => Err(HirError::UnsupportedExpr(UnsupportedExpr {
@@ -2385,14 +2397,12 @@ impl<'hir> TypeChecker<'hir> {
                 // - *const T cannot become *T (mutable)
                 match (p1.is_const, p2.is_const) {
                     // *T expected, *const T found: cannot convert const to mutable
-                    (false, true) => {
-                        return Err(Self::type_mismatch_err(
-                            &format!("{}", expected_ty),
-                            &expected_span,
-                            &format!("{}", found_ty),
-                            &found_span,
-                        ));
-                    }
+                    (false, true) => Err(Self::type_mismatch_err(
+                        &format!("{}", expected_ty),
+                        &expected_span,
+                        &format!("{}", found_ty),
+                        &found_span,
+                    )),
                     // Both same constness, or *const T expected and *T found (mutable to const is OK)
                     _ => self.is_equivalent_ty(p1.inner, expected_span, p2.inner, found_span),
                 }
@@ -2413,14 +2423,14 @@ impl<'hir> TypeChecker<'hir> {
                         }
                     }
                 }
-                return Err(HirError::TypeIsNotCopyable(TypeIsNotCopyableError {
+                Err(HirError::TypeIsNotCopyable(TypeIsNotCopyableError {
                     span: found_span,
                     type_name: found_ty.to_string(),
                     src: NamedSource::new(
                         found_span.path,
                         utils::get_file_content(found_span.path).unwrap(),
                     ),
-                }));
+                }))
             }
             // TODO: Replace Unit type with a proper nullptr_t type
             (HirTy::PtrTy(_), HirTy::Unit(_)) => Ok(()),
@@ -2647,16 +2657,6 @@ impl<'hir> TypeChecker<'hir> {
         }
     }
 
-    fn trying_to_mutate_const_reference(span: &Span, ty: &HirTy<'_>) -> HirError {
-        let path = span.path;
-        let src = utils::get_file_content(path).unwrap();
-        HirError::TryingToMutateConstPointer(TryingToMutateConstPointerError {
-            span: *span,
-            ty: ty.to_string(),
-            src: NamedSource::new(path, src),
-        })
-    }
-
     #[inline(always)]
     fn type_mismatch_err(
         expected_type: &str,
@@ -2856,15 +2856,14 @@ impl<'hir> TypeChecker<'hir> {
     ) {
         let path = class.span.path;
         let src = utils::get_file_content(path).unwrap();
-        let warning: ErrReport = HirWarning::NonTriviallyCopyableStructHoldsARawPointerWithNoCustomDestructor(
-            NonTriviallyCopyableStructHoldsARawPointerWithNoCustomDestructorWarning {
+        let warning: ErrReport =
+            HirWarning::UnsafeRawPointerStruct(UnsafeRawPointerStructWarning {
                 src: NamedSource::new(path, src),
                 struct_span: class.name_span,
                 pointer_span,
                 struct_name: class.name.to_string(),
-            },
-        )
-        .into();
+            })
+            .into();
         eprintln!("{:?}", warning);
     }
 
@@ -2988,7 +2987,13 @@ impl<'hir> TypeChecker<'hir> {
     fn is_arithmetic_type(ty: &HirTy) -> bool {
         matches!(
             ty,
-            HirTy::Integer(_) | HirTy::LiteralInteger(_) | HirTy::UnsignedInteger(_) | HirTy::LiteralUnsignedInteger(_) | HirTy::Float(_) | HirTy::LiteralFloat(_) | HirTy::Char(_) 
+            HirTy::Integer(_)
+                | HirTy::LiteralInteger(_)
+                | HirTy::UnsignedInteger(_)
+                | HirTy::LiteralUnsignedInteger(_)
+                | HirTy::Float(_)
+                | HirTy::LiteralFloat(_)
+                | HirTy::Char(_)
         )
     }
 
@@ -3013,7 +3018,13 @@ impl<'hir> TypeChecker<'hir> {
     fn is_orderable_type(ty: &HirTy) -> bool {
         matches!(
             ty,
-            HirTy::Integer(_) | HirTy::LiteralInteger(_) | HirTy::UnsignedInteger(_) | HirTy::LiteralUnsignedInteger(_) | HirTy::Float(_) | HirTy::LiteralFloat(_) | HirTy::Char(_)
+            HirTy::Integer(_)
+                | HirTy::LiteralInteger(_)
+                | HirTy::UnsignedInteger(_)
+                | HirTy::LiteralUnsignedInteger(_)
+                | HirTy::Float(_)
+                | HirTy::LiteralFloat(_)
+                | HirTy::Char(_)
         )
     }
 }

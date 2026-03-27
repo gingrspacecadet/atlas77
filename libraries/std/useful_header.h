@@ -136,4 +136,9 @@ extern inline uint64_t atlas77_input_impl(uint8_t *buf, uint64_t size)
 // To ease the developers and streamline the process
 // #include <raylib.h>
 
+int64_t clocks_per_sec()
+{
+    return CLOCKS_PER_SEC;
+}
+
 #endif /* ATLAS77_USEFUL_HEADER_H */

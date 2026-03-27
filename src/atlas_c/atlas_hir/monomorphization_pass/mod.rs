@@ -835,7 +835,7 @@ impl<'hir> MonomorphizationPass<'hir> {
             HirExpr::IntrinsicCall(intrinsic) => {
                 for arg_ty in intrinsic.args_ty.iter_mut() {
                     let monomorphized_ty =
-                        self.swap_generic_types_in_ty(*arg_ty, types_to_change.clone());
+                        self.swap_generic_types_in_ty(arg_ty, types_to_change.clone());
                     *arg_ty = monomorphized_ty;
                 }
                 for arg in intrinsic.args.iter_mut() {

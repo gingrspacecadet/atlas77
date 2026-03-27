@@ -562,7 +562,7 @@ impl HirPrettyPrinter {
                     self.write(&format!(".{} = ", field_init.name));
                     self.print_expr(&field_init.value);
                     self.write(", ");
-                    
+
                     self.write("\n");
                 }
                 self.dedent();
@@ -581,7 +581,7 @@ impl HirPrettyPrinter {
                 ));
             }
             HirExpr::IntrinsicCall(intrinsic) => {
-                self.write(&intrinsic.name);
+                self.write(intrinsic.name);
                 if !intrinsic.args_ty.is_empty() {
                     self.write("<");
                     for (i, ty) in intrinsic.args_ty.iter().enumerate() {

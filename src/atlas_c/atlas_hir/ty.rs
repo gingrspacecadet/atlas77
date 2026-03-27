@@ -254,25 +254,26 @@ impl HirTy<'_> {
             | HirTy::LiteralUnsignedInteger(_)
             | HirTy::Function(_)
             | HirTy::Slice(_) => true,
-            HirTy::Named(named_ty) => {
-                signatures
-                    .structs
-                    .get(named_ty.name)
-                    .is_some_and(|sig| sig.is_trivially_copyable || sig.is_std_copyable)
-            }
-            HirTy::Generic(generic_ty) => {
-                signatures
-                    .structs
-                    .get(generic_ty.name)
-                    .copied()
-                    .or_else(|| {
-                        signatures.structs.values().find(|sig| {
-                            sig.pre_mangled_ty
-                                .is_some_and(|pre| pre.name == generic_ty.name && pre.inner == generic_ty.inner)
-                        }).copied()
-                    })
-                    .is_some_and(|sig| sig.is_trivially_copyable || sig.is_std_copyable)
-            }
+            HirTy::Named(named_ty) => signatures
+                .structs
+                .get(named_ty.name)
+                .is_some_and(|sig| sig.is_trivially_copyable || sig.is_std_copyable),
+            HirTy::Generic(generic_ty) => signatures
+                .structs
+                .get(generic_ty.name)
+                .copied()
+                .or_else(|| {
+                    signatures
+                        .structs
+                        .values()
+                        .find(|sig| {
+                            sig.pre_mangled_ty.is_some_and(|pre| {
+                                pre.name == generic_ty.name && pre.inner == generic_ty.inner
+                            })
+                        })
+                        .copied()
+                })
+                .is_some_and(|sig| sig.is_trivially_copyable || sig.is_std_copyable),
             // Pointers are trivially copyable (they're just addresses)
             HirTy::PtrTy(_) => true,
             HirTy::InlineArray(arr) => arr.inner.is_copyable(signatures),
