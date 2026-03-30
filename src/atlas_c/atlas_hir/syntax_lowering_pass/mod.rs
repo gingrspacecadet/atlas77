@@ -1435,7 +1435,10 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                     name: "move",
                                     ty: src_expr.ty(),
                                     args: vec![src_expr],
-                                    args_ty: vec![self.arena.types().get_uninitialized_ty()],
+                                    // Don't prefill `args_ty` with `uninitialized` here —
+                                    // leave it empty so the type checker infers parameter
+                                    // types from the actual argument expressions.
+                                    args_ty: vec![],
                                     span: node.span(),
                                 });
                                 return Ok(hir);
