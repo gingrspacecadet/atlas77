@@ -343,17 +343,19 @@ impl<'hir> HirLoweringPass<'hir> {
         // Take the completed function and clean up dead blocks
         let mut result = self.current_function.take().unwrap();
         result.remove_dead_blocks();
-        // TODO: This is very goofy and should never be done, I'll rework it later to properly work
-        self.current_function = Some(result);
-        if let Some(b) = self.current_function.as_ref().unwrap().blocks.last() {
-            if method.signature.return_ty.is_unit() {
-                if matches!(b.terminator, LirTerminator::None) {
-                    // For methods returning unit, ensure there's a return at the end
 
-                    self.emit_terminator(LirTerminator::Return { value: None })?;
+        // Find the last non-empty block (has instructions or a terminator)
+        if let Some(idx) = (0..result.blocks.len()).rev().find(|i| {
+            let b = &result.blocks[*i];
+            !b.instructions.is_empty() || !matches!(b.terminator, LirTerminator::None)
+        }) {
+            if method.signature.return_ty.is_unit() {
+                if matches!(result.blocks[idx].terminator, LirTerminator::None) {
+                    // For methods returning unit, ensure there's a return at the end
+                    result.blocks[idx].terminator = LirTerminator::Return { value: None };
                 }
             } else if !matches!(
-                b.terminator,
+                result.blocks[idx].terminator,
                 LirTerminator::Return { value: Some(_) } | LirTerminator::Halt
             ) {
                 // It should return something, but doesn't
@@ -367,7 +369,7 @@ impl<'hir> HirLoweringPass<'hir> {
                 )));
             }
         }
-        let result = self.current_function.take().unwrap();
+
         Ok(result)
     }
 
@@ -416,20 +418,23 @@ impl<'hir> HirLoweringPass<'hir> {
         // Take the completed function and clean up dead blocks
         let mut result = self.current_function.take().unwrap();
         result.remove_dead_blocks();
-        // TODO: This is very goofy and should never be done, I'll rework it later to properly work
-        self.current_function = Some(result);
-        if let Some(b) = self.current_function.as_ref().unwrap().blocks.last() {
+
+        // Find the last non-empty block (has instructions or a terminator)
+        if let Some(idx) = (0..result.blocks.len()).rev().find(|i| {
+            let b = &result.blocks[*i];
+            !b.instructions.is_empty() || !matches!(b.terminator, LirTerminator::None)
+        }) {
             if func.signature.return_ty.is_unit() {
-                if matches!(b.terminator, LirTerminator::None) {
+                if matches!(result.blocks[idx].terminator, LirTerminator::None) {
                     // For functions returning unit, ensure there's a return at the end
                     if func.name == "main" {
-                        self.emit_terminator(LirTerminator::Halt)?;
+                        result.blocks[idx].terminator = LirTerminator::Halt;
                     } else {
-                        self.emit_terminator(LirTerminator::Return { value: None })?;
+                        result.blocks[idx].terminator = LirTerminator::Return { value: None };
                     }
                 }
             } else if !matches!(
-                b.terminator,
+                result.blocks[idx].terminator,
                 LirTerminator::Return { value: Some(_) } | LirTerminator::Halt
             ) {
                 // It should return something, but doesn't
@@ -443,7 +448,7 @@ impl<'hir> HirLoweringPass<'hir> {
                 )));
             }
         }
-        let result = self.current_function.take().unwrap();
+
         Ok(result)
     }
 
