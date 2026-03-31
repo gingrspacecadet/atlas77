@@ -384,7 +384,9 @@ impl HirPrettyPrinter {
             HirStatement::Return(ret) => {
                 self.write_indent();
                 self.write("return ");
-                self.print_expr(&ret.value);
+                if let Some(value) = &ret.value {
+                    self.print_expr(value);
+                }
                 self.write(";\n");
             }
             HirStatement::Expr(expr_stmt) => {

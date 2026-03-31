@@ -107,9 +107,11 @@ impl<'hir> HirOwnershipPass<'hir> {
                     statements.push(HirStatement::Block(transformed));
                 }
                 HirStatement::Return(ret) => {
-                    self.validate_expr(&ret.value, scope_stack);
-                    let excluded = self.returned_identifier_name(&ret.value);
-                    statements.extend(self.collect_scope_drops(scope_stack, excluded));
+                    if let Some(expr) = &ret.value {
+                        self.validate_expr(expr, scope_stack);
+                        let excluded = self.returned_identifier_name(expr);
+                        statements.extend(self.collect_scope_drops(scope_stack, excluded));
+                    }
                     statements.push(HirStatement::Return(ret));
                 }
                 HirStatement::Expr(expr_stmt) => {

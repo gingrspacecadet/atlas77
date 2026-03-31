@@ -1063,15 +1063,23 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             }
             //The parser really need a bit of work
             AstStatement::Return(ast_return) => {
-                let expr = self.visit_expr(ast_return.value)?;
-                let (mut temps, expr) = self.separate_temporaries(expr, true);
-                let hir = HirStatement::Return(HirReturn {
-                    span: node.span(),
-                    ty: expr.ty(),
-                    value: expr,
-                });
-                temps.push(hir);
-                Ok(temps)
+                if let Some(expr) = &ast_return.value {
+                    let expr_hir = self.visit_expr(expr)?;
+                    let (mut temps, expr) = self.separate_temporaries(expr_hir, true);
+                    let hir = HirStatement::Return(HirReturn {
+                        span: node.span(),
+                        ty: expr.ty(),
+                        value: Some(expr),
+                    });
+                    temps.push(hir);
+                    Ok(temps)
+                } else {
+                    Ok(vec![HirStatement::Return(HirReturn {
+                        span: node.span(),
+                        value: None,
+                        ty: self.arena.types().get_uninitialized_ty(),
+                    })])
+                }
             }
             AstStatement::Expr(ast_expr) => {
                 let expr = self.visit_expr(ast_expr)?;

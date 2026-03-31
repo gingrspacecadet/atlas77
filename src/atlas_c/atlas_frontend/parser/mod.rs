@@ -1645,11 +1645,7 @@ impl<'ast> Parser<'ast> {
         if self.current().kind == TokenKind::Semicolon {
             let node = AstReturnStmt {
                 span: self.current().span(),
-                value: self
-                    .arena
-                    .alloc(AstExpr::Literal(AstLiteral::Unit(AstUnitLiteral {
-                        span: self.current().span(),
-                    }))),
+                value: None,
             };
             self.expect(TokenKind::Semicolon)?;
             return Ok(node);
@@ -1657,7 +1653,7 @@ impl<'ast> Parser<'ast> {
         let expr = self.parse_expr()?;
         let node = AstReturnStmt {
             span: Span::union_span(&self.current().span(), &expr.span()),
-            value: self.arena.alloc(expr),
+            value: Some(self.arena.alloc(expr)),
         };
         self.expect(TokenKind::Semicolon)?;
         Ok(node)

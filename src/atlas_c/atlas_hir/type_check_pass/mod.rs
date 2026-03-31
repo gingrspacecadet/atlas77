@@ -529,23 +529,33 @@ impl<'hir> TypeChecker<'hir> {
                     (self.arena.types().get_uninitialized_ty(), ret.span)
                 };
 
-                self.retag_integer_literal_for_expected_ty(expected_ret_ty, &mut ret.value);
-                let actual_ret_ty = self.check_expr(&mut ret.value)?;
+                if let Some(expr) = &mut ret.value {
+                    self.retag_integer_literal_for_expected_ty(expected_ret_ty, expr);
+                    let actual_ret_ty = self.check_expr(expr)?;
 
-                // Check for returning a reference to a local variable (directly or through a struct)
-                let local_refs = self.get_local_ptr_targets(&ret.value);
-                if let Some(local_var_name) = local_refs.first() {
-                    let path = ret.span.path;
-                    let src = utils::get_file_content(path).unwrap();
-                    return Err(HirError::ReturningReferenceToLocalVariable(
-                        ReturningPointerToLocalVariableError {
-                            span: ret.value.span(),
-                            var_name: local_var_name.to_string(),
-                            src: NamedSource::new(path, src),
-                        },
-                    ));
+                    // Check for returning a reference to a local variable (directly or through a struct)
+                    let local_refs = self.get_local_ptr_targets(expr);
+                    if let Some(local_var_name) = local_refs.first() {
+                        let path = ret.span.path;
+                        let src = utils::get_file_content(path).unwrap();
+                        return Err(HirError::ReturningReferenceToLocalVariable(
+                            ReturningPointerToLocalVariableError {
+                                span: expr.span(),
+                                var_name: local_var_name.to_string(),
+                                src: NamedSource::new(path, src),
+                            },
+                        ));
+                    }
+                    self.is_equivalent_ty(expected_ret_ty, span, actual_ret_ty, expr.span())
+                } else {
+                    // Void return, only valid if expected return type is unit
+                    self.is_equivalent_ty(
+                        expected_ret_ty,
+                        span,
+                        self.arena.types().get_unit_ty(),
+                        ret.span,
+                    )
                 }
-                self.is_equivalent_ty(expected_ret_ty, span, actual_ret_ty, ret.value.span())
             }
             HirStatement::While(w) => {
                 match self.check_expr(&mut w.condition) {

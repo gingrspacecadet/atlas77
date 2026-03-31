@@ -523,7 +523,7 @@ pub struct AstCastingExpr<'ast> {
 #[derive(Debug, Clone)]
 pub struct AstReturnStmt<'ast> {
     pub span: Span,
-    pub value: &'ast AstExpr<'ast>,
+    pub value: Option<&'ast AstExpr<'ast>>,
 }
 
 #[derive(Debug, Clone)]

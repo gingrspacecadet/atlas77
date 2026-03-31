@@ -456,8 +456,12 @@ impl<'hir> HirLoweringPass<'hir> {
     fn lower_stmt(&mut self, stmt: &'hir HirStatement<'hir>) -> LirResult<()> {
         match stmt {
             HirStatement::Return(ret) => {
-                let value = self.lower_expr(&ret.value)?;
-                self.emit_terminator(LirTerminator::Return { value: Some(value) })?;
+                if let Some(value) = &ret.value {
+                let value = self.lower_expr(value)?;
+                    self.emit_terminator(LirTerminator::Return { value: Some(value) })?;
+                } else {
+                    self.emit_terminator(LirTerminator::Return { value: None })?;
+                }
             }
             HirStatement::IfElse(if_else) => {
                 // Lower condition

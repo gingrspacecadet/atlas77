@@ -688,7 +688,9 @@ impl<'hir> MonomorphizationPass<'hir> {
                 self.monomorphize_expression(&mut if_else_stmt.condition, types_to_change, module)?;
             }
             HirStatement::Return(return_stmt) => {
-                self.monomorphize_expression(&mut return_stmt.value, types_to_change, module)?;
+                if let Some(expr) = &mut return_stmt.value {
+                    self.monomorphize_expression(expr, types_to_change, module)?;
+                }
             }
             HirStatement::Block(block_stmt) => {
                 for stmt in block_stmt.statements.iter_mut() {

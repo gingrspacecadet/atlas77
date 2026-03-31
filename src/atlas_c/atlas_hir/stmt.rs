@@ -76,7 +76,7 @@ pub struct HirIfElseStmt<'hir> {
 #[derive(Debug, Clone)]
 pub struct HirReturn<'hir> {
     pub span: Span,
-    pub value: HirExpr<'hir>,
+    pub value: Option<HirExpr<'hir>>,
     pub ty: &'hir HirTy<'hir>,
 }
 #[derive(Debug, Clone)]
