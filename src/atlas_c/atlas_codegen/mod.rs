@@ -282,12 +282,7 @@ impl CCodeGen {
             LirTy::Str => "uint8_t*".to_string(),
             LirTy::Ptr { is_const, inner } => {
                 let inner_type = self.codegen_type(inner);
-                if inner_type.ends_with('*') {
-                    // Avoid double pointers for now
-                    inner_type
-                } else {
-                    format!("{}{}*", if *is_const { "const " } else { "" }, inner_type)
-                }
+                format!("{}{}*", if *is_const { "const " } else { "" }, inner_type)
             }
             // Struct type is a value type in LIR. Pointer semantics are represented by LirTy::Ptr.
             LirTy::StructType(name) => name.to_string(),
@@ -710,8 +705,7 @@ impl CCodeGen {
                     LirTy::ArrayTy { inner, .. } => self.codegen_type(inner),
                     _ => panic!("ConstructArray expected ArrayTy"),
                 };
-                let type_name_str = type_str.trim_end_matches('*').to_string();
-                let line = format!("{} {}[{}] = {{0}};", type_name_str, dest_str, size);
+                let line = format!("{} {}[{}] = {{0}};", type_str, dest_str, size);
                 Self::write_to_file(&mut self.c_file, &line, self.indent_level);
             }
             // Similar to {foo: bar, baz: qux}
