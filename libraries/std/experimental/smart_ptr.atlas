@@ -26,25 +26,42 @@ public:
 }
 
 //! Experimental ref-counted pointer.
-public struct shared_ptr<T> {
+//! This `shared_ptr` is a simplified version and does not support cyclic references or weak pointers.
+public struct shared_ptr<T>  {
 private:
     //! Pointer to the shared block.
-    block: ptr<rc_block<T>>;
+    block: *rc_block<T>;
 public:
     //! Custom destructor - release the reference.
     ~shared_ptr() {
         this->release();
     }
+
     fun new(val: T) -> shared_ptr<T> {
         let block = malloc<rc_block<T>>(size_of<rc_block<T>>());
         (*block).set(1u, val);
         return shared_ptr<T> { .block = block };
     }
+
     //! Allocate a new `shared_ptr` owning `val`.
     fun make(val: T) -> shared_ptr<T> {
-        let block: ptr<rc_block<T>> = malloc<rc_block<T>>(size_of<rc_block<T>>());
-        (*block).set(1u, val);
+        let block: *rc_block<T> = malloc<rc_block<T>>(size_of<rc_block<T>>());
+        block->set(1u, val);
         return shared_ptr<T> { .block = block };
+    }
+
+    fun copy(*this) -> shared_ptr<T>
+    {
+        if this->block == null {
+            panic("cannot clone an empty shared_ptr");
+        }
+        let old = this->block->strong;
+        if old == 0u {
+            panic("cannot clone a released shared_ptr");
+        }
+        let new_counter = old + 1u;
+        this->block->strong = new_counter;
+        return shared_ptr<T> { .block = this->block };
     }
 
     //! Release ownership; free block when count hits zero.
@@ -100,25 +117,14 @@ public:
 
 extern fun len<T>(data: [T]) -> uint64;
 
-struct vector<T> {
+#[std::trivially_copyable]
+struct slice<T> {
 public:
     // Just for testing
     data: *T;
     length: uint64;
 public:
-    fun new(data: *T) -> vector<T> {
-        return vector<T> { .data = data, .length = 3u };
+    fun new(data: *T) -> slice<T> {
+        return slice<T> { .data = data, .length = 3u };
     }
-}
-
-fun main() {
-    let arr = ["1 as int64", "2 as int64", "3 as int64"];
-    let vec = vector::<*uint8>::new(&arr[0u]);
-    let rc_vec = shared_ptr::<vector<*uint8>>::make(vec);
-    // This should trigger the copy constructor
-    let rc_vec_clone = rc_vec;
-    print("Length of rc_vec: ");
-    printf("%d\n", rc_vec.get()->length);
-    print("Length of rc_vec_clone: ");
-    printf("%d\n", rc_vec_clone.get()->length);
 }
