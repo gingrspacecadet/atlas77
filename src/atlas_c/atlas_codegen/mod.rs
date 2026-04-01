@@ -208,8 +208,8 @@ impl CCodeGen {
         let mut struct_def = format!("typedef struct {} {{\n", strukt.name);
         for (field_name, field_type) in strukt.fields.iter() {
             let field_sig = match field_type {
-                LirTy::ArrayTy { inner, size } => {
-                    format!("\t{} {}[{}];\n", self.codegen_type(inner), field_name, size)
+                LirTy::ArrayTy { .. } => {
+                    format!("\t{};\n", self.codegen_array_decl(field_type, field_name))
                 }
                 _ => format!("\t{} {};\n", self.codegen_type(field_type), field_name),
             };
@@ -248,9 +248,7 @@ impl CCodeGen {
         let mut prototype = format!("{} {}(", self.codegen_type(ret), name);
         for (i, arg) in args.iter().enumerate() {
             let arg_sig = match arg {
-                LirTy::ArrayTy { inner, size } => {
-                    format!("{} arg_{}[{}]", self.codegen_type(inner), i, size)
-                }
+                LirTy::ArrayTy { .. } => self.codegen_array_decl(arg, &format!("arg_{}", i)),
                 _ => format!("{} arg_{}", self.codegen_type(arg), i),
             };
             self.codegen_type(arg);
@@ -262,6 +260,21 @@ impl CCodeGen {
         }
         prototype.push(')');
         prototype
+    }
+
+    fn codegen_array_decl(&mut self, ty: &LirTy, name: &str) -> String {
+        let mut dims: Vec<usize> = Vec::new();
+        let mut current = ty;
+        while let LirTy::ArrayTy { inner, size } = current {
+            dims.push(*size);
+            current = inner;
+        }
+        let base = self.codegen_type(current);
+        let mut decl = format!("{} {}", base, name);
+        for dim in dims {
+            decl.push_str(&format!("[{}]", dim));
+        }
+        decl
     }
 
     fn codegen_type(&mut self, ty: &LirTy) -> String {
@@ -697,15 +710,16 @@ impl CCodeGen {
             }
             // Creates an array on the stack.
             // C equivalent to T dest[size] = {0};
-            LirInstr::ConstructArray { ty, dst, size } => {
+            LirInstr::ConstructArray { ty, dst, size: _ } => {
                 let dest_str = self.codegen_operand(dst);
                 // In C, arrays are defined as T name[size];
                 // This will probably not work for multi-dimensional arrays yet
-                let type_str = match ty {
-                    LirTy::ArrayTy { inner, .. } => self.codegen_type(inner),
+                let line = match ty {
+                    LirTy::ArrayTy { .. } => {
+                        format!("{} = {{0}};", self.codegen_array_decl(ty, &dest_str))
+                    }
                     _ => panic!("ConstructArray expected ArrayTy"),
                 };
-                let line = format!("{} {}[{}] = {{0}};", type_str, dest_str, size);
                 Self::write_to_file(&mut self.c_file, &line, self.indent_level);
             }
             // Similar to {foo: bar, baz: qux}
