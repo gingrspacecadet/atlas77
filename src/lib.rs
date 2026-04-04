@@ -218,6 +218,14 @@ pub mod with_tcc {
         // vendor/tinycc/win32/include/sys/ + vendor/tinycc/win32/include/tcc/ + vendor/tinycc/win32/include/sec_api +
         // vendor/tinycc/win32/include/sec_api/sys/
         if target.contains("windows") {
+            let portable_include = manifest_dir.join("vendor/tinycc/include");
+            let portable_include_c =
+                CString::new(portable_include.to_string_lossy().as_ref()).unwrap();
+            eprintln!("Adding TinyCC include path: {}", portable_include.display());
+            unsafe {
+                tcc_add_include_path(tcc, portable_include_c.as_ptr());
+            }
+
             let base_include = manifest_dir.join("vendor/tinycc/win32/include");
             let include_c = CString::new(base_include.to_string_lossy().as_ref()).unwrap();
             eprintln!("Adding TinyCC include path: {}", base_include.display());
