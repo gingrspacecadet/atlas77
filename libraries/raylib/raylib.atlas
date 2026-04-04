@@ -3,9 +3,7 @@
 
 import "std/math";
 
-extern fun printf<T>(format: *const uint8, value: T);
-
-extern struct Vector2
+public extern struct Vector2
 {
 public:
     x: float32;
@@ -24,7 +22,7 @@ public:
     }
 }
 
-extern struct Vector3
+public extern struct Vector3
 {
 public:
     x: float32;
@@ -44,19 +42,7 @@ public:
     }
 }
 
-struct TestStruct
-{
-    a: int32;
-    b: float32;
-    c: Vector2;
-    d: Vector3;
-    fun new(a: int32, b: float32, c: Vector2, d: Vector3) -> TestStruct
-    {
-        return TestStruct { .a = a, .b = b, .c = c, .d = d };
-    }
-}
-
-extern struct Color {
+public extern struct Color {
 public:
     r: uint8;
     g: uint8;
@@ -100,6 +86,10 @@ public:
     {
         return Color::new(80, 80, 80, 255);
     }
+    fun LightGray() -> Color
+    {
+        return Color::new(200, 200, 200, 255);
+    }
     fun SkyBlue() -> Color
     {
         return Color::new(135, 206, 235, 255);
@@ -110,7 +100,7 @@ public:
     }
 }
 
-extern struct Rectangle
+public extern struct Rectangle
 {
 public:
     x: float32;
@@ -119,7 +109,7 @@ public:
     height: float32;
 }
 
-extern struct Camera2D
+public extern struct Camera2D
 {
 public:
     offset: Vector2;
@@ -129,7 +119,7 @@ public:
 }
 
 
-enum KeyboardKey {
+public enum KeyboardKey {
     KEY_NULL            = 0;        // Key: NULL, used for no key pressed
     // Alphanumeric keys
     KEY_APOSTROPHE      = 39;       // Key: '
@@ -247,212 +237,52 @@ enum KeyboardKey {
 }
 
 
-extern fun InitWindow(width: int32, height: int32, title: *const uint8);
-extern fun CloseWindow();
-extern fun WindowShouldClose() -> bool;
-extern fun SetTargetFPS(fps: int32);
+public extern fun InitWindow(width: int32, height: int32, title: *const uint8);
+public extern fun CloseWindow();
+public extern fun WindowShouldClose() -> bool;
+public extern fun SetTargetFPS(fps: int32);
 
 // Drawing
-extern fun BeginDrawing();
-extern fun EndDrawing();
-extern fun ClearBackground(color: Color);
-extern fun Fade(color: Color, alpha: float32) -> Color;
+public extern fun BeginDrawing();
+public extern fun EndDrawing();
+public extern fun ClearBackground(color: Color);
+public extern fun Fade(color: Color, alpha: float32) -> Color;
 
 // Text
-extern fun DrawText(text: *const uint8, posX: int32, posY: int32, fontSize: int32, color: Color);
-extern fun DrawFPS(posX: int32, posY: int32);
+public extern fun DrawText(text: *const uint8, posX: int32, posY: int32, fontSize: int32, color: Color);
+public extern fun DrawFPS(posX: int32, posY: int32);
 
 // 3D Mode
-extern fun BeginMode3D(camera: Camera3D);
-extern fun BeginMode2D(camera: Camera2D);
-extern fun EndMode3D();
-extern fun EndMode2D();
+public extern fun BeginMode3D(camera: Camera3D);
+public extern fun BeginMode2D(camera: Camera2D);
+public extern fun EndMode3D();
+public extern fun EndMode2D();
 
 // 3D Drawing
-extern fun DrawPlane(centerPos: Vector3, size: Vector2, color: Color);
-extern fun DrawCube(position: Vector3, width: float32, height: float32, length: float32, color: Color);
-extern fun DrawCubeWires(position: Vector3, width: float32, height: float32, length: float32, color: Color);
-extern fun DrawGrid(slices: int32, spacing: float32);
-extern fun DrawRectangle(posX: int32, posY: int32, width: int32, height: int32, color: Color);
-extern fun DrawRectangleRec(rect: Rectangle, color: Color);
-extern fun DrawRectangleLines(posX: int32, posY: int32, width: int32, height: int32, color: Color);
-extern fun DrawLine(startPosX: int32, startPosY: int32, endPosX: int32, endPosY: int32, color: Color);
+public extern fun DrawPlane(centerPos: Vector3, size: Vector2, color: Color);
+public extern fun DrawCube(position: Vector3, width: float32, height: float32, length: float32, color: Color);
+public extern fun DrawCubeWires(position: Vector3, width: float32, height: float32, length: float32, color: Color);
+public extern fun DrawGrid(slices: int32, spacing: float32);
+public extern fun DrawRectangle(posX: int32, posY: int32, width: int32, height: int32, color: Color);
+public extern fun DrawRectangleRec(rect: Rectangle, color: Color);
+public extern fun DrawRectangleLines(posX: int32, posY: int32, width: int32, height: int32, color: Color);
+public extern fun DrawLine(startPosX: int32, startPosY: int32, endPosX: int32, endPosY: int32, color: Color);
 
 // Camera
-extern fun UpdateCamera(camera: *Camera3D, mode: int32);
+public extern fun UpdateCamera(camera: *Camera3D, mode: int32);
 
 // Input - Keyboard
-extern fun IsKeyDown(key: KeyboardKey) -> bool;
-extern fun IsKeyPressed(key: KeyboardKey) -> bool;
+public extern fun IsKeyDown(key: KeyboardKey) -> bool;
+public extern fun IsKeyPressed(key: KeyboardKey) -> bool;
 
 // Input - Mouse
-extern fun GetMouseDelta() -> Vector2;
-extern fun DisableCursor();
-extern fun EnableCursor();
-extern fun GetMouseWheelMove() -> float32;
+public extern fun GetMouseDelta() -> Vector2;
+public extern fun DisableCursor();
+public extern fun EnableCursor();
+public extern fun GetMouseWheelMove() -> float32;
 
 // Timing
-extern fun GetFrameTime() -> float32;
+public extern fun GetFrameTime() -> float32;
 
 // Random
-extern fun GetRandomValue(min: int32, max: int32) -> int32;
-
-
-extern fun printf<T>(format: string, value: T);
-
-//------------------------------------------------------------------------------------
-// Program main entry point
-//------------------------------------------------------------------------------------
-fun main()
-{
-    // Initialization
-    //--------------------------------------------------------------------------------------
-    const MAX_BUILDINGS: uint64 = 256;
-    const screenWidth: int32 = 800;
-    const screenHeight: int32 = 450;
-
-    InitWindow(screenWidth, screenHeight, "raylib [core] example - 2d camera");
-
-    let player: Rectangle = Rectangle { .x = 400.0, .y = 280.0, .width = 40.0, .height = 40.0 };
-    // TODO: Add a way to create inline arrays with: `[1_expr; lit_size]`
-    let buildings: [Rectangle; 256] = [Rectangle  { .x = 0.0, .y = 0.0, .width = 0.0, .height = 0.0 }; 256];
-    let buildColors: [Color; 256] = [Color { .r = 0, .g = 0, .b = 0, .a = 0 }; 256];
-
-    let spacing: int32 = 0;
-
-    let i: uint64 = 0;
-    while i < MAX_BUILDINGS
-    {
-        printf("Generating building %d: ", i);
-        buildings[i].width = GetRandomValue(50, 200) as float32;
-        printf("width = %f, ", buildings[i].width);
-        buildings[i].height = GetRandomValue(100, 800) as float32;
-        printf("height = %f, ", buildings[i].height);
-        buildings[i].y = (screenHeight - 130) as float32 - buildings[i].height;
-        printf("y = %f, ", buildings[i].y);
-        buildings[i].x = (-6000.0 + spacing as float32);
-        printf("x = %f\n", buildings[i].x);
-
-        spacing = spacing + buildings[i].width as int32;
-
-        buildColors[i] = Color {
-            .r = GetRandomValue(200, 240) as uint8,
-            .g = GetRandomValue(200, 240) as uint8,
-            .b = GetRandomValue(200, 250) as uint8,
-            .a = 255};
-        
-        i = i + 1;
-    }
-
-    let camera: Camera2D = Camera2D { 
-        .offset = Vector2::default(), 
-        .target = Vector2::default(), 
-        .rotation = 0.0, 
-        .zoom = 0.0 
-    };
-    camera.target = Vector2 { .x = player.x + 20.0, .y = player.y + 20.0 };
-    camera.offset = Vector2 { .x = (screenWidth/2) as float32, .y = (screenHeight/2) as float32 };
-    camera.rotation = 0.0;
-    camera.zoom = 1.0;
-
-    SetTargetFPS(60);                   // Set our game to run at 60 frames-per-second
-    //--------------------------------------------------------------------------------------
-
-    // Main game loop
-    while (!WindowShouldClose())        // Detect window close button or ESC key
-    {
-        // Update
-        //----------------------------------------------------------------------------------
-        // Player movement
-        if (IsKeyDown(KeyboardKey::KEY_RIGHT)) {
-            player.x = player.x + 10.0;
-        }
-        else if (IsKeyDown(KeyboardKey::KEY_LEFT)) {
-            player.x = player.x - 10.0;
-        }
-
-        // Camera target follows player
-        camera.target = Vector2 { 
-            .x = player.x + 20.0, 
-            .y = player.y + 20.0 
-        };
-
-        // Camera rotation controls
-        if (IsKeyDown(KeyboardKey::KEY_A)) {
-            camera.rotation = camera.rotation - 1.0;
-        }
-        else if (IsKeyDown(KeyboardKey::KEY_S)) {
-            camera.rotation = camera.rotation + 1.0;
-        }
-
-        // Limit camera rotation to 80 degrees (-40 to 40)
-        if (camera.rotation > 40.0) {
-            camera.rotation = 40.0;
-        }
-        else if (camera.rotation < -40.0) {
-            camera.rotation = -40.0;
-        }
-
-        // Camera zoom controls
-        // Uses log scaling to provide consistent zoom speed
-        camera.zoom = expf(logf(camera.zoom) + (GetMouseWheelMove()*0.1));
-
-        if (camera.zoom > 3.0) {camera.zoom = 3.0;}
-        else if (camera.zoom < 0.1) {camera.zoom = 0.1;}
-
-        // Camera reset (zoom and rotation)
-        if (IsKeyPressed(KeyboardKey::KEY_R)) {
-            camera.zoom = 1.0;
-            camera.rotation = 0.0;
-        }
-        //----------------------------------------------------------------------------------
-
-        // Draw
-        //----------------------------------------------------------------------------------
-        BeginDrawing();
-
-        ClearBackground(Color::RayWhite());
-
-        BeginMode2D(camera);
-
-        DrawRectangle(-6000, 320, 13000, 8000, Color::DarkGray());
-
-        let iBuilding: uint64 = 0;
-        while (iBuilding < MAX_BUILDINGS) {
-            DrawRectangleRec(buildings[iBuilding], buildColors[iBuilding]);
-
-            iBuilding = iBuilding + 1;
-        }
-
-        DrawRectangleRec(player, Color::Red());
-
-        DrawLine(camera.target.x as int32, -screenHeight*10, camera.target.x as int32, screenHeight*10, Color::Green());
-        DrawLine(-screenWidth*10, camera.target.y as int32, screenWidth*10, camera.target.y as int32, Color::Green());
-
-        EndMode2D();
-
-        DrawText("SCREEN AREA", 640, 10, 20, Color::Red());
-
-        DrawRectangle(0, 0, screenWidth, 5, Color::Red());
-        DrawRectangle(0, 5, 5, screenHeight - 10, Color::Red());
-        DrawRectangle(screenWidth - 5, 5, 5, screenHeight - 10, Color::Red());
-        DrawRectangle(0, screenHeight - 5, screenWidth, 5, Color::Red());
-
-        DrawRectangle( 10, 10, 250, 113, Fade(Color::SkyBlue(), 0.5));
-        DrawRectangleLines( 10, 10, 250, 113, Color::Blue());
-
-        DrawText("Free 2D camera controls:", 20, 20, 10, Color::Black());
-        DrawText("- Right/Left to move player", 40, 40, 10, Color::DarkGray());
-        DrawText("- Mouse Wheel to Zoom in-out", 40, 60, 10, Color::DarkGray());
-        DrawText("- A / S to Rotate", 40, 80, 10, Color::DarkGray());
-        DrawText("- R to reset Zoom and Rotation", 40, 100, 10, Color::DarkGray());
-
-        EndDrawing();
-        //----------------------------------------------------------------------------------
-    }
-
-    // De-Initialization
-    //--------------------------------------------------------------------------------------
-    CloseWindow();        // Close window and OpenGL context
-    //--------------------------------------------------------------------------------------
-}
+public extern fun GetRandomValue(min: int32, max: int32) -> int32;
