@@ -25,9 +25,9 @@ use ast::{
     AstCallExpr, AstConst, AstExpr, AstExternFunction, AstFieldAccessExpr, AstFloatLiteral,
     AstFloatType, AstFunction, AstFunctionType, AstIdentifier, AstIfElseExpr, AstImport,
     AstIntegerLiteral, AstIntegerType, AstItem, AstLet, AstLiteral, AstNamedType, AstNamespace,
-    AstObjField, AstProgram, AstReturnStmt, AstStatement, AstStringLiteral, AstStringType,
-    AstType, AstUnaryOp, AstUnaryOpExpr, AstUnitType, AstUnsignedIntegerLiteral,
-    AstUnsignedIntegerType, AstWhileExpr,
+    AstObjField, AstProgram, AstReturnStmt, AstStatement, AstStringLiteral, AstStringType, AstType,
+    AstUnaryOp, AstUnaryOpExpr, AstUnitType, AstUnsignedIntegerLiteral, AstUnsignedIntegerType,
+    AstWhileExpr,
 };
 
 use crate::atlas_c::atlas_frontend::lexer::{
@@ -1900,10 +1900,7 @@ impl<'ast> Parser<'ast> {
         let first = self.current();
         match first.kind() {
             TokenKind::Identifier(s) => {
-                is_namespace_like = s
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.is_ascii_lowercase());
+                is_namespace_like = s.chars().next().is_some_and(|ch| ch.is_ascii_lowercase());
                 segments.push(s);
                 end_span = first.span();
             }

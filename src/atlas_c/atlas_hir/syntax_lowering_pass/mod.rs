@@ -259,26 +259,21 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 let hir_enum = self.visit_enum(e)?;
                 let qualified = self.qualified_name(e.name.name);
                 let enum_name = self.arena.names().get(&qualified);
-                self.module_body
+                self.module_body.enums.insert(enum_name, hir_enum.clone());
+                self.module_signature
                     .enums
-                    .insert(enum_name, hir_enum.clone());
-                self.module_signature.enums.insert(
-                    enum_name,
-                    self.arena.intern(hir_enum),
-                );
+                    .insert(enum_name, self.arena.intern(hir_enum));
             }
             AstItem::Union(ast_union) => {
                 let hir_union = self.visit_union(ast_union)?;
                 let qualified = self.qualified_name(ast_union.name.name);
                 let union_name = self.arena.names().get(&qualified);
-                self.module_body.unions.insert(
-                    union_name,
-                    hir_union.clone(),
-                );
-                self.module_signature.unions.insert(
-                    union_name,
-                    self.arena.intern(hir_union.signature.clone()),
-                );
+                self.module_body
+                    .unions
+                    .insert(union_name, hir_union.clone());
+                self.module_signature
+                    .unions
+                    .insert(union_name, self.arena.intern(hir_union.signature.clone()));
             }
         }
         Ok(())

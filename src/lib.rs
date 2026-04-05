@@ -78,6 +78,7 @@ pub mod with_tcc {
         extra_include_dirs: &[String],
         extra_library_dirs: &[String],
         extra_libraries: &[String],
+        extra_c_sources: &[String],
     ) -> miette::Result<()> {
         let start = Instant::now();
 
@@ -133,7 +134,43 @@ pub mod with_tcc {
             // read C file and pass as C string
             let code = std::fs::read_to_string("./build/output.atlas_c.c").unwrap();
             let code_c = CString::new(code).unwrap();
-            let res = tcc_compile_string(tcc, code_c.as_ptr());
+            let mut res = tcc_compile_string(tcc, code_c.as_ptr());
+
+            // Compile user-provided C source units (e.g. shim wrappers) into the same TCC state.
+            if res == 0 {
+                for c_source in extra_c_sources {
+                    match std::fs::read_to_string(c_source) {
+                        Ok(source) => {
+                            eprintln!("Compiling extra C source with TinyCC: {}", c_source);
+                            let source_c = match CString::new(source) {
+                                Ok(value) => value,
+                                Err(_) => {
+                                    eprintln!(
+                                        "TinyCC: skipped C source containing embedded NUL byte: {}",
+                                        c_source
+                                    );
+                                    res = -1;
+                                    break;
+                                }
+                            };
+                            let source_res = tcc_compile_string(tcc, source_c.as_ptr());
+                            if source_res != 0 {
+                                eprintln!("TinyCC: failed to compile extra C source: {}", c_source);
+                                res = source_res;
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "TinyCC: failed to read extra C source {}: {}",
+                                c_source, err
+                            );
+                            res = -1;
+                            break;
+                        }
+                    }
+                }
+            }
 
             // out name already uses CString; keep it around until after tcc_output_file
             let target = get_current_platform();
@@ -294,6 +331,7 @@ pub fn emit_binary(
     _extra_include_dirs: &[String],
     _extra_library_dirs: &[String],
     _extra_libraries: &[String],
+    _extra_c_sources: &[String],
 ) -> miette::Result<()> {
     eprintln!(
         "Embedded TinyCC feature is not enabled or TinyCC is unavailable on this platform. Cannot run compiled programs."
@@ -308,6 +346,7 @@ struct AtlasBuildConfig {
     include_dirs: Vec<String>,
     library_dirs: Vec<String>,
     libraries: Vec<String>,
+    c_sources: Vec<String>,
     compiler_args: Vec<String>,
 }
 
@@ -330,6 +369,28 @@ fn normalize_dir_path(project_dir: &Path, value: &str) -> String {
     } else {
         project_dir.join(candidate).to_string_lossy().to_string()
     }
+}
+
+fn find_project_dir_for_source(source_path: &Path, fallback: &Path) -> PathBuf {
+    let mut current = if source_path.is_dir() {
+        source_path.to_path_buf()
+    } else {
+        source_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| fallback.to_path_buf())
+    };
+
+    loop {
+        if current.join("atlas.toml").exists() {
+            return current;
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+
+    fallback.to_path_buf()
 }
 
 fn dedup_preserve_order(values: &mut Vec<String>) {
@@ -474,6 +535,15 @@ fn load_build_config(project_dir: &Path) -> miette::Result<AtlasBuildConfig> {
         config
             .library_dirs
             .extend(collect_string_array(c_table, "library_dirs"));
+        config
+            .c_sources
+            .extend(collect_string_array(c_table, "sources"));
+        config
+            .c_sources
+            .extend(collect_string_array(c_table, "source_files"));
+        config
+            .c_sources
+            .extend(collect_string_array(c_table, "c_sources"));
     }
 
     if let Some(link_table) = root.get("link").and_then(|v| v.as_table()) {
@@ -492,11 +562,15 @@ fn load_build_config(project_dir: &Path) -> miette::Result<AtlasBuildConfig> {
     for library_dir in &mut config.library_dirs {
         *library_dir = normalize_dir_path(project_dir, library_dir);
     }
+    for c_source in &mut config.c_sources {
+        *c_source = normalize_dir_path(project_dir, c_source);
+    }
 
     dedup_preserve_order(&mut config.headers);
     dedup_preserve_order(&mut config.include_dirs);
     dedup_preserve_order(&mut config.library_dirs);
     dedup_preserve_order(&mut config.libraries);
+    dedup_preserve_order(&mut config.c_sources);
     dedup_preserve_order(&mut config.compiler_args);
 
     Ok(config)
@@ -792,8 +866,9 @@ pub fn build(
     let start = Instant::now();
     println!("Building project at path: {}", path);
     let path_buf = get_path(&path);
-    let project_dir = std::env::current_dir()
+    let cwd = std::env::current_dir()
         .map_err(|err| miette::miette!("Failed to get current directory: {}", err))?;
+    let project_dir = find_project_dir_for_source(&path_buf, &cwd);
     let mut atlas_build_config = load_build_config(&project_dir)?;
     let compiler = compiler
         .or(atlas_build_config.preferred_compiler)
@@ -942,6 +1017,7 @@ pub fn build(
                     &atlas_build_config.include_dirs,
                     &atlas_build_config.library_dirs,
                     &atlas_build_config.libraries,
+                    &atlas_build_config.c_sources,
                 )?;
                 stage_runtime_dlls(&output_dir, &atlas_build_config);
             }
@@ -953,6 +1029,7 @@ pub fn build(
                 );
                 let mut command = std::process::Command::new("tcc");
                 command.arg("./build/output.atlas_c.c");
+                command.args(&atlas_build_config.c_sources);
                 command.arg("-o");
                 let target = if cfg!(target_os = "windows") {
                     format!("{}/a.exe", output_dir)
@@ -975,6 +1052,7 @@ pub fn build(
             // Let's invoke it with `gcc ./build/output.atlas_c.c -o {output_dir}` (and `-O2` for release)
             let mut command = std::process::Command::new("gcc");
             command.arg("./build/output.atlas_c.c");
+            command.args(&atlas_build_config.c_sources);
             command.arg("-o");
             let target = if cfg!(target_os = "windows") {
                 format!("{}/a.exe", output_dir)
@@ -1000,6 +1078,7 @@ pub fn build(
             // Let's invoke it with `cl ./build/output.atlas_c.c /Fe:{output_dir}` (and `/O2` for release)
             let mut command = std::process::Command::new("cl");
             command.arg("./build/output.atlas_c.c");
+            command.args(&atlas_build_config.c_sources);
             let target = if cfg!(target_os = "windows") {
                 format!("{}/a.exe", output_dir)
             } else {
@@ -1024,6 +1103,7 @@ pub fn build(
             // Let's invoke it with `clang ./build/output.atlas_c.c -o {output_dir}` (and `-O2` for release)
             let mut command = std::process::Command::new("clang");
             command.arg("./build/output.atlas_c.c");
+            command.args(&atlas_build_config.c_sources);
             command.arg("-o");
             let target = if cfg!(target_os = "windows") {
                 format!("{}/a.exe", output_dir)
@@ -1049,6 +1129,7 @@ pub fn build(
             // Let's invoke it with `icc ./build/output.atlas_c.c -o {output_dir}` (and `-O2` for release)
             let mut command = std::process::Command::new("icc");
             command.arg("./build/output.atlas_c.c");
+            command.args(&atlas_build_config.c_sources);
             command.arg("-o");
             let target = if cfg!(target_os = "windows") {
                 format!("{}/a.exe", output_dir)
