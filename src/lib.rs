@@ -347,6 +347,7 @@ struct AtlasBuildConfig {
     library_dirs: Vec<String>,
     libraries: Vec<String>,
     c_sources: Vec<String>,
+    source_dirs: Vec<String>,
     compiler_args: Vec<String>,
 }
 
@@ -364,10 +365,56 @@ fn parse_supported_compiler(name: &str) -> Option<SupportedCompiler> {
 
 fn normalize_dir_path(project_dir: &Path, value: &str) -> String {
     let candidate = PathBuf::from(value);
-    if candidate.is_absolute() {
-        candidate.to_string_lossy().to_string()
+    let absolute = if candidate.is_absolute() {
+        candidate
     } else {
-        project_dir.join(candidate).to_string_lossy().to_string()
+        project_dir.join(candidate)
+    };
+
+    normalize_path_string(&absolute)
+}
+
+fn normalize_path_string(path: &Path) -> String {
+    let normalized = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut cleaned = normalized.replace('/', "\\");
+        if let Some(stripped) = cleaned.strip_prefix(r"\\?\") {
+            cleaned = stripped.to_string();
+        }
+        cleaned.to_ascii_lowercase()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        normalized
+    }
+}
+
+fn collect_c_sources_from_dir(dir: &Path, out: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_c_sources_from_dir(&path, out);
+            continue;
+        }
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("c"))
+        {
+            out.push(path.to_string_lossy().to_string());
+        }
     }
 }
 
@@ -544,6 +591,9 @@ fn load_build_config(project_dir: &Path) -> miette::Result<AtlasBuildConfig> {
         config
             .c_sources
             .extend(collect_string_array(c_table, "c_sources"));
+        config
+            .source_dirs
+            .extend(collect_string_array(c_table, "source_dirs"));
     }
 
     if let Some(link_table) = root.get("link").and_then(|v| v.as_table()) {
@@ -565,12 +615,22 @@ fn load_build_config(project_dir: &Path) -> miette::Result<AtlasBuildConfig> {
     for c_source in &mut config.c_sources {
         *c_source = normalize_dir_path(project_dir, c_source);
     }
+    for source_dir in &mut config.source_dirs {
+        *source_dir = normalize_dir_path(project_dir, source_dir);
+    }
+
+    let mut discovered_sources = Vec::new();
+    for source_dir in &config.source_dirs {
+        collect_c_sources_from_dir(Path::new(source_dir), &mut discovered_sources);
+    }
+    config.c_sources.extend(discovered_sources);
 
     dedup_preserve_order(&mut config.headers);
     dedup_preserve_order(&mut config.include_dirs);
     dedup_preserve_order(&mut config.library_dirs);
     dedup_preserve_order(&mut config.libraries);
     dedup_preserve_order(&mut config.c_sources);
+    dedup_preserve_order(&mut config.source_dirs);
     dedup_preserve_order(&mut config.compiler_args);
 
     Ok(config)
@@ -588,20 +648,28 @@ fn apply_default_native_layout(
 
     let include_dir = project_dir.join("include");
     if include_dir.is_dir() {
-        config
-            .include_dirs
-            .push(include_dir.to_string_lossy().to_string());
+        let include_dir_norm = normalize_path_string(&include_dir);
+        config.include_dirs.push(include_dir_norm.clone());
+        config.source_dirs.push(include_dir_norm);
     }
 
     let library_dir = project_dir.join("lib");
     if library_dir.is_dir() {
         config
             .library_dirs
-            .push(library_dir.to_string_lossy().to_string());
+            .push(normalize_path_string(&library_dir));
     }
 
     dedup_preserve_order(&mut config.include_dirs);
     dedup_preserve_order(&mut config.library_dirs);
+    dedup_preserve_order(&mut config.source_dirs);
+
+    let mut discovered_sources = Vec::new();
+    for source_dir in &config.source_dirs {
+        collect_c_sources_from_dir(Path::new(source_dir), &mut discovered_sources);
+    }
+    config.c_sources.extend(discovered_sources);
+    dedup_preserve_order(&mut config.c_sources);
 }
 
 fn build_compiler_args(config: &AtlasBuildConfig, compiler: SupportedCompiler) -> Vec<String> {
