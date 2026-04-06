@@ -8,7 +8,7 @@
 
 use std::str::FromStr;
 
-use atlas_77::{CompilationFlag, SupportedCompiler, build, generate_docs};
+use atlas_77::{CompilationFlag, SupportedCompiler, build, generate_docs, package};
 use clap::Parser;
 
 #[derive(Parser)] // requires `derive` feature
@@ -104,6 +104,20 @@ enum AtlasRuntimeCLI {
         output: String,
         file_path: Option<String>,
     },
+    #[command(
+        about = "Generate namespaced C shim files from a C header",
+        long_about = "Generate atlas77-<header>.h/.c wrappers to expose namespaced symbols (e.g. raylib_Foo) while forwarding to the original C API."
+    )]
+    Package {
+        /// Path to the C header file (e.g. include/raylib.h)
+        header: String,
+        #[arg(long)]
+        /// Namespace/prefix to use (defaults to header stem)
+        namespace: Option<String>,
+        #[arg(short = 'o', long)]
+        /// Output directory for generated files (defaults to header directory)
+        output_dir: Option<String>,
+    },
 }
 
 fn main() -> miette::Result<()> {
@@ -169,6 +183,26 @@ fn main() -> miette::Result<()> {
         }
         AtlasRuntimeCLI::Docs { output, file_path } => {
             generate_docs(output, file_path.as_deref());
+            Ok(())
+        }
+        AtlasRuntimeCLI::Package {
+            header,
+            namespace,
+            output_dir,
+        } => {
+            let result =
+                package::package_c_header(&header, namespace.as_deref(), output_dir.as_deref())?;
+            println!("Generated shim header: {}", result.shim_header.display());
+            println!("Generated shim source: {}", result.shim_c.display());
+            println!("Generated atlas module: {}", result.atlas_module.display());
+            if result.skipped.is_empty() {
+                println!("Skipped declarations: none");
+            } else {
+                println!("Skipped declarations:");
+                for item in result.skipped {
+                    println!("- {}: {}", item.name, item.reason);
+                }
+            }
             Ok(())
         }
     }

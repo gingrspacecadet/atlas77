@@ -50,11 +50,7 @@ impl CCodeGen {
                 out.push('_');
             }
         }
-        if out.is_empty() {
-            "_".to_string()
-        } else {
-            out
-        }
+        if out.is_empty() { "_".to_string() } else { out }
     }
 
     pub fn new() -> Self {
@@ -770,14 +766,12 @@ impl CCodeGen {
                 // Pointer delete: run destructor when applicable, then free.
                 match ty {
                     LirTy::StructType(name) => {
-                        let dtor_line =
-                            format!("{}___dtor(&{});", Self::c_ident(name), src_str);
+                        let dtor_line = format!("{}___dtor(&{});", Self::c_ident(name), src_str);
                         Self::write_to_file(&mut self.c_file, &dtor_line, self.indent_level);
                     }
                     LirTy::Ptr { inner, .. } => {
                         if let LirTy::StructType(name) = inner.as_ref() {
-                            let dtor_line =
-                                format!("{}___dtor({});", Self::c_ident(name), src_str);
+                            let dtor_line = format!("{}___dtor({});", Self::c_ident(name), src_str);
                             Self::write_to_file(&mut self.c_file, &dtor_line, self.indent_level);
                         }
                     }

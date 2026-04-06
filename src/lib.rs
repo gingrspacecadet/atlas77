@@ -16,6 +16,7 @@
 pub mod atlas_c;
 pub mod atlas_docs;
 pub mod atlas_lib;
+pub mod package;
 #[cfg(all(feature = "embedded-tinycc", not(tinycc_unavailable)))]
 pub mod tcc;
 
