@@ -688,6 +688,7 @@ fn build_compiler_args(config: &AtlasBuildConfig, compiler: SupportedCompiler) -
     compiler_args
 }
 
+#[cfg(target_os = "windows")]
 fn normalize_library_name_for_runtime(lib: &str) -> String {
     lib.strip_prefix("-l")
         .unwrap_or(lib)
