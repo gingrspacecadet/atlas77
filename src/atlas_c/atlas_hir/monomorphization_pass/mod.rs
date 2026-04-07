@@ -19,6 +19,14 @@ use crate::atlas_c::{
 use miette::NamedSource;
 pub mod generic_pool;
 
+#[derive(Debug, Clone)]
+pub struct MethodMonomorphizationRequest<'hir> {
+    pub owner_name: &'hir str,
+    pub method_name: &'hir str,
+    pub generic_args: Vec<&'hir HirTy<'hir>>,
+    pub span: Span,
+}
+
 //Maybe all the passes should share a common trait? Or be linked to a common context struct?
 pub struct MonomorphizationPass<'hir> {
     arena: &'hir HirArena<'hir>,
@@ -72,6 +80,27 @@ impl<'hir> MonomorphizationPass<'hir> {
                 module.body.unions.remove(name);
             }
         }
+
+        // Remove unresolved generic method templates from concrete structs.
+        // Concrete specializations generated on-demand remain because their
+        // method signatures have `generics = None`.
+        let struct_names: Vec<&'hir str> = module.body.structs.keys().copied().collect();
+        for struct_name in struct_names {
+            if let Some(struct_item) = module.body.structs.get_mut(struct_name) {
+                struct_item
+                    .methods
+                    .retain(|method| method.signature.generics.is_none());
+                struct_item
+                    .signature
+                    .methods
+                    .retain(|_, method_sig| method_sig.generics.is_none());
+
+                module.signature.structs.insert(
+                    struct_name,
+                    self.arena.intern(struct_item.signature.clone()),
+                );
+            }
+        }
     }
 
     pub fn monomorphize(
@@ -82,10 +111,119 @@ impl<'hir> MonomorphizationPass<'hir> {
         while !self.process_pending_generics(module)? {}
         //2. If you encounter a generic struct or function instantiation (e.g. in the return type), register it to the pool
         //3. Generate the actual bodies of the structs & functions in the pool, if you encounter new instantiations while generating, register them too
-        //4. Clear the generic structs & functions from the module body and signature
-        self.clear_generic(module);
+        //4. Generic template cleanup is deferred until the caller finishes any
+        //   on-demand monomorphization rounds.
 
         Ok(module)
+    }
+
+    pub fn monomorphize_requested_methods(
+        &mut self,
+        module: &mut HirModule<'hir>,
+        requests: Vec<MethodMonomorphizationRequest<'hir>>,
+    ) -> HirResult<bool> {
+        let mut changed = false;
+        for request in requests.iter() {
+            if self.instantiate_method_from_request(module, request)? {
+                changed = true;
+            }
+        }
+
+        if changed {
+            while !self.process_pending_generics(module)? {}
+        }
+
+        Ok(changed)
+    }
+
+    fn instantiate_method_from_request(
+        &mut self,
+        module: &mut HirModule<'hir>,
+        request: &MethodMonomorphizationRequest<'hir>,
+    ) -> HirResult<bool> {
+        let mut owner = match module.body.structs.get(request.owner_name) {
+            Some(s) => s.clone(),
+            None => return Ok(false),
+        };
+
+        let template_sig = match owner.signature.methods.get(request.method_name) {
+            Some(s) => s.clone(),
+            None => return Ok(false),
+        };
+        let template_method = match owner.methods.iter().find(|m| m.name == request.method_name) {
+            Some(m) => m.clone(),
+            None => return Ok(false),
+        };
+
+        let Some(method_generics) = template_sig.generics.clone() else {
+            return Ok(false);
+        };
+
+        if method_generics.len() != request.generic_args.len() {
+            return Ok(false);
+        }
+
+        let mangled_method_name = Self::generate_mangled_name(
+            self.arena,
+            &HirGenericTy {
+                name: request.method_name,
+                inner: request.generic_args.iter().map(|g| (*g).clone()).collect(),
+                span: request.span,
+            },
+            "method",
+        );
+
+        if owner.signature.methods.contains_key(mangled_method_name)
+            || owner.methods.iter().any(|m| m.name == mangled_method_name)
+        {
+            return Ok(false);
+        }
+
+        let types_to_change: Vec<(&'hir str, &'hir HirTy<'hir>)> = method_generics
+            .iter()
+            .enumerate()
+            .map(|(i, generic_constraint)| {
+                (generic_constraint.generic_name, request.generic_args[i])
+            })
+            .collect();
+
+        let mut new_sig = template_sig.clone();
+        for param in new_sig.params.iter_mut() {
+            for (generic_name, concrete_ty) in types_to_change.iter() {
+                param.ty =
+                    self.change_inner_type(param.ty, generic_name, (*concrete_ty).clone(), module);
+            }
+        }
+        let mut return_ty = self.arena.intern(new_sig.return_ty.clone()) as &'hir HirTy<'hir>;
+        for (generic_name, concrete_ty) in types_to_change.iter() {
+            return_ty =
+                self.change_inner_type(return_ty, generic_name, (*concrete_ty).clone(), module);
+        }
+        new_sig.return_ty = return_ty.clone();
+        new_sig.generics = None;
+        new_sig.is_constraint_satisfied = true;
+
+        let mut new_method = template_method.clone();
+        new_method.name = mangled_method_name;
+        new_method.signature = self.arena.intern(new_sig.clone());
+
+        for statement in new_method.body.statements.iter_mut() {
+            self.monomorphize_statement(statement, types_to_change.clone(), module)?;
+        }
+
+        owner
+            .signature
+            .methods
+            .insert(mangled_method_name, new_sig.clone());
+        owner.methods.push(new_method);
+
+        module.signature.structs.insert(
+            request.owner_name,
+            self.arena.intern(owner.signature.clone()),
+        );
+        module.body.structs.insert(request.owner_name, owner);
+
+        Ok(true)
     }
 
     fn process_pending_generics(&mut self, module: &mut HirModule<'hir>) -> HirResult<bool> {
@@ -391,16 +529,6 @@ impl<'hir> MonomorphizationPass<'hir> {
         let mut methods_constraint_status: std::collections::HashMap<&str, bool> =
             std::collections::HashMap::new();
         for (name, func) in new_struct.signature.methods.iter() {
-            // Skip methods with their own generics for now
-            if func.generics.is_some() {
-                eprintln!(
-                    "Warning: Skipping monomorphization of method {} because it has its own generics",
-                    name
-                );
-                methods_constraint_status.insert(name, false);
-                continue;
-            }
-
             // Check where_clause constraints (struct-level generics only)
             let is_satisfied = if let Some(where_clause) = &func.where_clause {
                 self.check_where_constraints_on_method(
@@ -463,7 +591,10 @@ impl<'hir> MonomorphizationPass<'hir> {
                     )
                     .clone();
             }
-            func.generics = None;
+
+            if func.generics.is_none() {
+                func.generics = None;
+            }
         }
 
         //At this point the signature is fully monomorphized, but the actual struct itself isn't.
@@ -1073,6 +1204,25 @@ impl<'hir> MonomorphizationPass<'hir> {
                         .register_union_instance(&generic_ty, &module.signature);
                 }
                 res
+            }
+            HirTy::Function(func) => {
+                let new_ret =
+                    self.change_inner_type(func.ret_ty, generic_name, new_type.clone(), module);
+                let new_params = func
+                    .params
+                    .iter()
+                    .map(|p| {
+                        self.change_inner_type(p, generic_name, new_type.clone(), module)
+                            .clone()
+                    })
+                    .collect();
+                self.arena.intern(HirTy::Function(HirFunctionTy {
+                    ret_ty: new_ret,
+                    ret_ty_span: func.ret_ty_span,
+                    params: new_params,
+                    param_spans: func.param_spans.clone(),
+                    span: func.span,
+                }))
             }
             HirTy::PtrTy(ptr_ty) => self.arena.intern(HirTy::PtrTy(HirPtrTy {
                 inner: self.change_inner_type(ptr_ty.inner, generic_name, new_type, module),

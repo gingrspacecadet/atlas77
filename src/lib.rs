@@ -987,12 +987,29 @@ pub fn build(
         )
         .unwrap();
 
-    //type-check (collect errors and continue when gravity allows it)
+    // type-check with on-demand method monomorphization requests.
     let mut hir = hir;
     let mut semantic_errors: Vec<HirError> = Vec::new();
+    let mut typecheck_result: Result<(), HirError> = Ok(());
+    // Kinda high, but we want to be 100% sure to converge on monomorphization before giving up and reporting errors. If this becomes a problem we can always add a more specific heuristic here.
+    const MAX_ON_DEMAND_MONO_ROUNDS: usize = 128;
 
-    let mut type_checker = TypeChecker::new(&hir_arena);
-    if let Err(err) = type_checker.check(&mut *hir) {
+    for _round in 0..MAX_ON_DEMAND_MONO_ROUNDS {
+        let mut type_checker = TypeChecker::new(&hir_arena);
+        typecheck_result = type_checker.check(&mut *hir);
+
+        let requests = type_checker.take_method_monomorphization_requests();
+        if requests.is_empty() {
+            break;
+        }
+
+        let changed = monomorphizer.monomorphize_requested_methods(&mut *hir, requests)?;
+        if !changed {
+            break;
+        }
+    }
+
+    if let Err(err) = typecheck_result {
         let can_continue_to_ownership = match err.gravity() {
             HirErrorGravity::CanGoUpTo(pass) => (pass as u8) >= (HirPass::OwnershipPass as u8),
             HirErrorGravity::CanFinishCurrentPassButNotContinue => false,
@@ -1016,6 +1033,9 @@ pub fn build(
             );
         }
     }
+
+    // Generic templates are no longer needed after on-demand monomorphization converges.
+    monomorphizer.clear_generic(&mut *hir);
 
     //ownership analysis + RAII delete insertion (run even after recoverable type-check errors)
     let mut ownership_pass = HirOwnershipPass::new(&hir_arena, &hir.signature);

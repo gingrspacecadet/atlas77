@@ -33,7 +33,7 @@ use crate::atlas_c::atlas_hir::{
         HirThisLiteral, HirUnaryOp, HirUnsignedIntegerLiteralExpr,
     },
     item::{HirStruct, HirStructMethod},
-    monomorphization_pass::MonomorphizationPass,
+    monomorphization_pass::{MethodMonomorphizationRequest, MonomorphizationPass},
     ty::{HirGenericTy, HirNamedTy, HirTy, HirTyId},
     type_check_pass::context::{ContextFunction, ContextVariable},
     warning::{HirWarning, TryingToCastToTheSameTypeWarning},
@@ -69,6 +69,7 @@ pub struct TypeChecker<'hir> {
         (&'hir str, Vec<&'hir HirTy<'hir>>, Vec<&'hir HirTy<'hir>>),
         &'hir HirFunctionSignature<'hir>,
     >,
+    pending_method_monomorphization: Vec<MethodMonomorphizationRequest<'hir>>,
     errors: Vec<HirError>,
 }
 
@@ -81,8 +82,44 @@ impl<'hir> TypeChecker<'hir> {
             current_func_name: None,
             current_class_name: None,
             extern_monomorphized: HashMap::new(),
+            pending_method_monomorphization: Vec::new(),
             errors: Vec::new(),
         }
+    }
+
+    pub fn take_method_monomorphization_requests(
+        &mut self,
+    ) -> Vec<MethodMonomorphizationRequest<'hir>> {
+        std::mem::take(&mut self.pending_method_monomorphization)
+    }
+
+    fn enqueue_method_monomorphization_request(
+        &mut self,
+        owner_name: &'hir str,
+        method_name: &'hir str,
+        generic_args: Vec<&'hir HirTy<'hir>>,
+        span: Span,
+    ) {
+        if self.pending_method_monomorphization.iter().any(|req| {
+            req.owner_name == owner_name
+                && req.method_name == method_name
+                && req.generic_args.len() == generic_args.len()
+                && req
+                    .generic_args
+                    .iter()
+                    .zip(generic_args.iter())
+                    .all(|(lhs, rhs)| std::ptr::eq(*lhs, *rhs))
+        }) {
+            return;
+        }
+
+        self.pending_method_monomorphization
+            .push(MethodMonomorphizationRequest {
+                owner_name,
+                method_name,
+                generic_args,
+                span,
+            });
     }
 
     pub fn check(&mut self, hir: &mut HirModule<'hir>) -> HirResult<()> {
@@ -94,16 +131,25 @@ impl<'hir> TypeChecker<'hir> {
         self.signature = hir.signature.clone();
 
         for (func_name, func) in &mut hir.body.functions {
+            if !func.signature.is_instantiated && !func.signature.generics.is_empty() {
+                continue;
+            }
             self.current_func_name = Some(func_name);
             let result = self.check_func(func);
             self.record_result(result);
         }
         for (class_name, class) in &mut hir.body.structs {
+            if !class.signature.is_instantiated && !class.signature.generics.is_empty() {
+                continue;
+            }
             self.current_class_name = Some(class_name);
             let result = self.check_class(class);
             self.record_result(result);
         }
         for hir_union in hir.body.unions.values_mut() {
+            if !hir_union.signature.is_instantiated && !hir_union.signature.generics.is_empty() {
+                continue;
+            }
             let result = self.check_union(hir_union);
             self.record_result(result);
         }
@@ -123,6 +169,25 @@ impl<'hir> TypeChecker<'hir> {
         if let Err(err) = result {
             self.errors.push(err);
         }
+    }
+
+    fn class_family_name(&self, class_name: &'hir str) -> &'hir str {
+        if let Some(sig) = self.signature.structs.get(class_name)
+            && let Some(pre_mangled) = sig.pre_mangled_ty
+        {
+            return pre_mangled.name;
+        }
+        class_name
+    }
+
+    fn is_same_class_family(&self, lhs: &'hir str, rhs: &'hir str) -> bool {
+        self.class_family_name(lhs) == self.class_family_name(rhs)
+    }
+
+    fn is_accessing_from_same_class_family(&self, target: &'hir str) -> bool {
+        self.current_class_name
+            .map(|current| self.is_same_class_family(current, target))
+            .unwrap_or(false)
     }
 
     fn type_requires_drop(
@@ -386,6 +451,9 @@ impl<'hir> TypeChecker<'hir> {
         }
 
         for method in &mut class.methods {
+            if method.signature.generics.is_some() {
+                continue;
+            }
             self.current_class_name = Some(class.name);
             self.current_func_name = Some(method.name);
             self.context_functions.push(HashMap::new());
@@ -1461,6 +1529,7 @@ impl<'hir> TypeChecker<'hir> {
                                         &mut static_access,
                                         &mut func_expr.args,
                                         &mut func_expr.args_ty,
+                                        &mut func_expr.generics,
                                         func_expr.span,
                                     )?;
                                     *callee = HirExpr::StaticAccess(static_access);
@@ -1599,12 +1668,55 @@ impl<'hir> TypeChecker<'hir> {
                                 },
                             ));
                         }
-                        let method = class
-                            .methods
-                            .iter()
-                            .find(|m| *m.0 == field_access.field.name);
+                        let lookup_method_name = if func_expr.generics.is_empty() {
+                            field_access.field.name
+                        } else {
+                            MonomorphizationPass::generate_mangled_name(
+                                self.arena,
+                                &HirGenericTy {
+                                    name: field_access.field.name,
+                                    inner: func_expr
+                                        .generics
+                                        .iter()
+                                        .map(|g| (*g).clone())
+                                        .collect(),
+                                    span: func_expr.span,
+                                },
+                                "method",
+                            )
+                        };
+
+                        let method = class.methods.iter().find(|m| *m.0 == lookup_method_name);
+
+                        if method.is_none() && !func_expr.generics.is_empty() {
+                            if let Some((_, template_sig)) = class
+                                .methods
+                                .iter()
+                                .find(|m| *m.0 == field_access.field.name)
+                                && let Some(method_generics) = &template_sig.generics
+                                && method_generics.len() == func_expr.generics.len()
+                            {
+                                self.enqueue_method_monomorphization_request(
+                                    name,
+                                    field_access.field.name,
+                                    func_expr.generics.clone(),
+                                    func_expr.span,
+                                );
+                            }
+
+                            return Err(Self::unknown_method_err(
+                                lookup_method_name,
+                                name,
+                                &field_access.span,
+                            ));
+                        }
 
                         if let Some((_, method_signature)) = method {
+                            field_access.field.name = lookup_method_name;
+                            if !func_expr.generics.is_empty() {
+                                func_expr.generics.clear();
+                            }
+
                             // Check if method's where_clause constraints are satisfied
                             if !method_signature.is_constraint_satisfied {
                                 let path = field_access.span.path;
@@ -1625,7 +1737,7 @@ impl<'hir> TypeChecker<'hir> {
                             }
 
                             //Check if you're currently in the class, if not check is the method public
-                            if self.current_class_name != Some(name)
+                            if !self.is_accessing_from_same_class_family(name)
                                 && method_signature.vis != HirVisibility::Public
                             {
                                 let src = utils::get_file_content(path).unwrap();
@@ -1703,7 +1815,7 @@ impl<'hir> TypeChecker<'hir> {
                             .iter()
                             .find(|f| *f.0 == field_access.field.name)
                         {
-                            if self.current_class_name != Some(name)
+                            if !self.is_accessing_from_same_class_family(name)
                                 && field_signature.vis != HirVisibility::Public
                             {
                                 let src = utils::get_file_content(path).unwrap();
@@ -1738,6 +1850,7 @@ impl<'hir> TypeChecker<'hir> {
                             static_access,
                             &mut func_expr.args,
                             &mut func_expr.args_ty,
+                            &mut func_expr.generics,
                             func_expr.span,
                         )?;
                         func_expr.ty = ty;
@@ -1836,7 +1949,7 @@ impl<'hir> TypeChecker<'hir> {
                     .iter()
                     .find(|f| *f.0 == field_access.field.name);
                 if let Some((_, field_signature)) = field {
-                    if self.current_class_name != Some(name)
+                    if !self.is_accessing_from_same_class_family(name)
                         && field_signature.vis != HirVisibility::Public
                     {
                         let path = field_access.span.path;
@@ -1948,7 +2061,7 @@ impl<'hir> TypeChecker<'hir> {
                     static_access.ty = const_signature.ty;
                     Ok(const_signature.ty)
                 } else if let Some(method_signature) = class.methods.get(static_access.field.name) {
-                    if self.current_class_name != Some(name)
+                    if !self.is_accessing_from_same_class_family(name)
                         && method_signature.vis != HirVisibility::Public
                     {
                         let path = static_access.span.path;
@@ -2424,6 +2537,7 @@ impl<'hir> TypeChecker<'hir> {
         static_access: &mut expr::HirStaticAccessExpr<'hir>,
         call_args: &mut Vec<HirExpr<'hir>>,
         call_args_ty: &mut Vec<&'hir HirTy<'hir>>,
+        call_generics: &mut Vec<&'hir HirTy<'hir>>,
         call_span: Span,
     ) -> HirResult<&'hir HirTy<'hir>> {
         let name = match static_access.target {
@@ -2448,11 +2562,51 @@ impl<'hir> TypeChecker<'hir> {
                 return Err(Self::unknown_type_err(name, &static_access.span));
             }
         };
-        let func = class
-            .methods
-            .iter()
-            .find(|m| *m.0 == static_access.field.name);
+        let lookup_method_name = if call_generics.is_empty() {
+            static_access.field.name
+        } else {
+            MonomorphizationPass::generate_mangled_name(
+                self.arena,
+                &HirGenericTy {
+                    name: static_access.field.name,
+                    inner: call_generics.iter().map(|g| (*g).clone()).collect(),
+                    span: call_span,
+                },
+                "method",
+            )
+        };
+
+        let func = class.methods.iter().find(|m| *m.0 == lookup_method_name);
+
+        if func.is_none() && !call_generics.is_empty() {
+            if let Some((_, template_sig)) = class
+                .methods
+                .iter()
+                .find(|m| *m.0 == static_access.field.name)
+                && let Some(method_generics) = &template_sig.generics
+                && method_generics.len() == call_generics.len()
+            {
+                self.enqueue_method_monomorphization_request(
+                    name,
+                    static_access.field.name,
+                    call_generics.clone(),
+                    call_span,
+                );
+            }
+
+            return Err(Self::unknown_method_err(
+                lookup_method_name,
+                name,
+                &static_access.span,
+            ));
+        }
+
         if let Some((_, method_signature)) = func {
+            static_access.field.name = lookup_method_name;
+            if !call_generics.is_empty() {
+                call_generics.clear();
+            }
+
             if !method_signature.is_constraint_satisfied {
                 let path = static_access.span.path;
                 let src = utils::get_file_content(path).unwrap();
