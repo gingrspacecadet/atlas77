@@ -15,8 +15,8 @@ use crate::atlas_c::{
 };
 use std::collections::HashSet;
 
-pub const HEADER_NAME: &str = "__atlas77_header.h";
-pub const PORTABLE_ATLAS77_HEADER: &str = include_str!("../../.././libraries/std/useful_header.h");
+pub const HEADER_NAME: &str = "atlas77.h";
+pub const PORTABLE_ATLAS77_HEADER: &str = include_str!("../../.././libraries/std/atlas77.h");
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum TypeDependency {
