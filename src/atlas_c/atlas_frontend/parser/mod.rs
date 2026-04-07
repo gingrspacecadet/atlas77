@@ -245,8 +245,23 @@ impl<'ast> Parser<'ast> {
             TokenKind::KwNamespace => Ok(AstItem::Namespace(self.parse_namespace()?)),
             TokenKind::KwExtern => {
                 let _ = self.advance();
+                let language = match self.current().kind() {
+                    TokenKind::StringLiteral(lang) => {
+                        let lang_str = lang;
+                        let _ = self.advance();
+                        self.arena.alloc(lang_str) as &'ast str
+                    }
+                    _ => {
+                        // Default to C if no language specified
+                        "C"
+                    }
+                };
                 match self.current().kind() {
-                    TokenKind::KwFunc => Ok(AstItem::ExternFunction(self.parse_extern_function()?)),
+                    TokenKind::KwFunc => {
+                        let mut func = self.parse_extern_function()?;
+                        func.language = language;
+                        Ok(AstItem::ExternFunction(func))
+                    }
                     TokenKind::KwStruct => Ok(AstItem::ExternStruct(self.parse_extern_struct()?)),
                     _ => Err(self.unexpected_token_error(
                         TokenVec(vec![TokenKind::KwFunc, TokenKind::KwStruct]),
@@ -1718,18 +1733,6 @@ impl<'ast> Parser<'ast> {
     }
 
     fn parse_extern_function(&mut self) -> ParseResult<AstExternFunction<'ast>> {
-        let language = match self.current().kind() {
-            TokenKind::StringLiteral(lang) => {
-                let lang_str = lang;
-                let _ = self.advance();
-                self.arena.alloc(lang_str) as &'ast str
-            }
-            _ => {
-                // Default to C if no language specified
-                "C"
-            }
-        };
-
         self.expect(TokenKind::KwFunc)?;
 
         let name = self.parse_identifier()?;
@@ -1775,7 +1778,7 @@ impl<'ast> Parser<'ast> {
             args_name: self.arena.alloc_vec(args_name),
             args_ty: self.arena.alloc_vec(args_ty),
             ret_ty: self.arena.alloc(ret_ty),
-            language,
+            language: "C",
             vis: AstVisibility::default(),
             docstring: None,
             flag: AstFlag::default(),
