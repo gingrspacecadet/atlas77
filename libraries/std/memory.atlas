@@ -37,7 +37,8 @@ namespace std {
         }
     }
 
-
+    //! A zero-sized type used as a sentinel for empty states in unions.
+    public struct empty {}
 }
 
 #[std::intrinsic]

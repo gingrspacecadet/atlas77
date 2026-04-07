@@ -1,4 +1,5 @@
 import "std/io";
+import "std/memory";
 
 namespace std {
     //! Storage for `expected<T, E>`.
@@ -9,6 +10,7 @@ namespace std {
     private union expected_storage<T, E> { 
         expected_value: T;
         unexpected_value: E;
+        empty: std::empty; // Sentinel for empty state when neither value is present
     }
 
     //! A result-like type representing either a value `T` or an error `E`.
@@ -21,12 +23,15 @@ namespace std {
     private:
         data: expected_storage<T, E>;
         has_expected_value: bool;
+        is_empty: bool; // Track if the expected is in an empty state (neither value is present)
     public:
         ~expected() {
-            if (this->has_expected_value) {
-                delete this->data.expected_value;
-            } else {
-                delete this->data.unexpected_value;
+            if (!this->is_empty) {
+                if (this->has_expected_value) {
+                    delete this->data.expected_value;
+                } else {
+                    delete this->data.unexpected_value;
+                }
             }
         }
         //! Construct a successful `expected` containing `data`.
@@ -39,6 +44,7 @@ namespace std {
                         .expected_value = data 
                     }, 
                     .has_expected_value = true
+                    .is_empty = false
                 };
         }
         //! Construct a failing `expected` containing `error`.
@@ -51,6 +57,7 @@ namespace std {
                     .unexpected_value = error 
                 }, 
                 .has_expected_value = false
+                .is_empty = false
             };
         }
         //! Returns true if this holds an expected value.
@@ -68,8 +75,9 @@ namespace std {
             if (!this->has_expected_value) {
                 panic("called expected_value() on an unexpected error");
             } else {
-                this->has_expected_value = false; // Prevent double delete in destructor
-                return this->data.expected_value;
+                this->is_empty = true; // Prevent double delete in destructor
+                let val = std::ptr::read(&this->data.expected_value);
+                return val;
             }
         }
         //! Consume the expected and return the contained error, panicking if this is an expected value.
@@ -79,14 +87,17 @@ namespace std {
             if (this->has_expected_value) {
                 panic("called unexpected_value() on an expected value");
             } else {
-                this->has_expected_value = false; // Prevent double delete in destructor
-                return this->data.unexpected_value;
+                this->is_empty = true; // Prevent double delete in destructor
+                let val = std::ptr::read(&this->data.unexpected_value);
+                return val;
             }
         }
         //! Consume the expected and return the contained value, or return `default` if this is an unexpected error.
         fun expected_value_or(*this, default: T) -> T {
             if (this->has_expected_value) {
-                return this->data.expected_value;
+                let val = std::ptr::read(&this->data.expected_value);
+                this->is_empty = true; // Prevent double delete in destructor
+                return val;
             } else {
                 return default;
             }
@@ -95,7 +106,9 @@ namespace std {
         //! Consume the expected and return the contained error, or return `default` if this is an expected value.
         fun unexpected_value_or(*this, default: E) -> E {
             if (!this->has_expected_value) {
-                return this->data.unexpected_value;
+                let val = std::ptr::read(&this->data.unexpected_value);
+                this->is_empty = true; // Prevent double delete in destructor
+                return val;
             } else {
                 return default;
             }

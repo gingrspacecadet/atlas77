@@ -41,6 +41,9 @@ namespace std {
         fun len(*const this) -> uint64 {
             return this->length;
         }
+        fun capacity(*const this) -> uint64 {
+            return this->capacity;
+        }
         //! Returns a const reference to the element at `index`.
         //! Panics on out-of-bounds access.
         fun get(*const this, index: uint64) -> *const T {
@@ -69,24 +72,22 @@ namespace std {
         //! Appends `val` to the end of the vector, resizing if necessary.
         fun push(*this, val: T) {
             if this->length >= this->capacity {
-                // Resize
-                let new_capacity: uint64 = 0u;
-                if this->capacity == 0u {
+                // Let's use `std::realloc` to resize the data buffer
+                // We double the capacity to amortize the cost of resizing
+                let new_capacity = this->capacity;
+                if new_capacity == 0u {
                     new_capacity = 1u;
                 } else {
-                    new_capacity = this->capacity * 2u;
+                    new_capacity = new_capacity * 2u;
                 }
-                let new_data = std::malloc<T>(sizeof<T>() * new_capacity);
-                let i: uint64 = 0u;
-                while i < this->length {
-                    new_data[i] = this->data[i];
-                    i = i + 1u;
+                let new_data = std::realloc<T>(this->data, size_of<T>() * new_capacity);
+                if new_data == null {
+                    std::panic("Failed to allocate memory for vector resizing");
                 }
-                std::free(this->data);
                 this->data = new_data;
                 this->capacity = new_capacity;
             }
-            this->data[this->length] = val;
+            std::ptr::write(&this->data[this->length], val);
             this->length = this->length + 1u;
         }
         
@@ -96,7 +97,7 @@ namespace std {
             if this->length == 0u {
                 std::panic("Cannot pop from an empty vector");
             }
-            let popped = std::move(*this->get(this->length - 1u));
+            let popped = std::ptr::read(&this->data[this->length - 1u]);
             this->length = this->length - 1u;
             return popped;
         }
@@ -118,7 +119,7 @@ namespace std {
             if index >= this->length {
                 return std::optional<T>::empty();
             }
-            let item: T = std::move(*this->get(index));
+            let item: T = std::ptr::read(&this->data[index]);
             // Shift elements to fill the gap
             let i: uint64 = index;
             while i + 1u < this->length {
@@ -129,5 +130,4 @@ namespace std {
             return std::optional<T>::of(item);
         }
     }
-
 }
