@@ -7,7 +7,7 @@ namespace std {
     //! Holds either an `expected_value: T` when the computation succeeded,
     //! or an `unexpected_value: E` when it failed. Presence is tracked by
     //! `expected<T, E>::has_expected_value`.
-    private union expected_storage<T, E> { 
+    private union __expected_storage<T, E> { 
         expected_value: T;
         unexpected_value: E;
         empty: std::empty; // Sentinel for empty state when neither value is present
@@ -21,7 +21,7 @@ namespace std {
     //!   `expected_value_or(default)`.
     public struct expected<T, E> {
     private:
-        data: expected_storage<T, E>;
+        data: std::__expected_storage<T, E>;
         has_expected_value: bool;
         is_empty: bool; // Track if the expected is in an empty state (neither value is present)
     public:
@@ -40,10 +40,10 @@ namespace std {
         //!     let e = std::expected<int64, string>::expect(42);
         fun expect(data: T) -> std::expected<T, E> {
             return std::expected<T, E> {
-                    .data = std::expected_storage<T, E> { 
+                    .data = std::__expected_storage<T, E> { 
                         .expected_value = data 
                     }, 
-                    .has_expected_value = true
+                    .has_expected_value = true,
                     .is_empty = false
                 };
         }
@@ -53,10 +53,10 @@ namespace std {
         //!     let e = std::expected<int64, string>::unexpected("oops");
         fun unexpected(error: E) -> std::expected<T, E> {
             return std::expected<T, E> {
-                .data = std::expected_storage<T, E> { 
+                .data = std::__expected_storage<T, E> { 
                     .unexpected_value = error 
                 }, 
-                .has_expected_value = false
+                .has_expected_value = false,
                 .is_empty = false
             };
         }
@@ -73,7 +73,7 @@ namespace std {
         //! Consider using `expected_value_or(default)` to avoid panics.
         fun expected_value(*this) -> T {
             if (!this->has_expected_value) {
-                panic("called expected_value() on an unexpected error");
+                std::panic("called expected_value() on an unexpected error");
             } else {
                 this->is_empty = true; // Prevent double delete in destructor
                 let val = std::ptr::read(&this->data.expected_value);
@@ -85,7 +85,7 @@ namespace std {
         //! Consider using `unexpected_value_or(default)` to avoid panics.
         fun unexpected_value(*this) -> E {
             if (this->has_expected_value) {
-                panic("called unexpected_value() on an expected value");
+                std::panic("called unexpected_value() on an expected value");
             } else {
                 this->is_empty = true; // Prevent double delete in destructor
                 let val = std::ptr::read(&this->data.unexpected_value);
