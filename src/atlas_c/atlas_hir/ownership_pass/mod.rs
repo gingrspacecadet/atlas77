@@ -7,9 +7,9 @@ use crate::atlas_c::{
         HirModule,
         arena::HirArena,
         error::{
-            HirError, HirResult, OwnershipAnalysisFailedError, TryingToAccessAConsumedValueError,
-            TryingToAccessADeletedValueError, TryingToAccessAMovedValueError,
-            TryingToAccessAPotentiallyConsumedValueError,
+            CannotMoveFromRvalueError, HirError, HirResult, OwnershipAnalysisFailedError,
+            TryingToAccessAConsumedValueError, TryingToAccessADeletedValueError,
+            TryingToAccessAMovedValueError, TryingToAccessAPotentiallyConsumedValueError,
             TryingToAccessAPotentiallyDeletedValueError, TryingToAccessAPotentiallyMovedValueError,
             TypeIsNotTriviallyCopyableError,
         },
@@ -541,9 +541,9 @@ impl<'hir> HirOwnershipPass<'hir> {
                 }
                 if intrinsic.name == "std::move"
                     && let Some(first_arg) = intrinsic.args.first()
-                    && let HirExpr::Ident(id) = self.strip_noop_unary(first_arg)
                 {
-                    self.mark_moved(scope_stack, id.name, id.span);
+                    let res = self.validate_move_argument(scope_stack, first_arg);
+                    self.record_result(res);
                 }
             }
             HirExpr::ThisLiteral(_)
@@ -627,6 +627,46 @@ impl<'hir> HirOwnershipPass<'hir> {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn validate_move_argument(
+        &mut self,
+        scope_stack: &mut [ScopeFrame<'hir>],
+        arg: &HirExpr<'hir>,
+    ) -> HirResult<()> {
+        let stripped = self.strip_noop_unary(arg);
+        let HirExpr::Ident(id) = stripped else {
+            let path = arg.span().path;
+            let src = utils::get_file_content(path).unwrap_or_default();
+            return Err(HirError::CannotMoveFromRvalue(CannotMoveFromRvalueError {
+                src: NamedSource::new(path, src),
+                span: arg.span(),
+                hint: "`std::move` only accepts local variables; assign the expression to a local first".to_string(),
+            }));
+        };
+
+        if self.find_local(scope_stack, id.name).is_none() {
+            let path = id.span.path;
+            let src = utils::get_file_content(path).unwrap_or_default();
+            return Err(HirError::CannotMoveFromRvalue(CannotMoveFromRvalueError {
+                src: NamedSource::new(path, src),
+                span: id.span,
+                hint: "`std::move` only accepts local variables".to_string(),
+            }));
+        }
+
+        if self.is_compiler_temp_name(id.name) {
+            let path = id.span.path;
+            let src = utils::get_file_content(path).unwrap_or_default();
+            return Err(HirError::CannotMoveFromRvalue(CannotMoveFromRvalueError {
+                src: NamedSource::new(path, src),
+                span: id.span,
+                hint: "`std::move` cannot be used with compiler temporaries (`__tmpN`); move from a named local variable".to_string(),
+            }));
+        }
+
+        self.mark_moved(scope_stack, id.name, id.span);
         Ok(())
     }
 
