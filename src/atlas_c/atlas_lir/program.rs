@@ -44,7 +44,13 @@ impl LirProgram {
                 let mut max_align = 1usize;
 
                 if let Some(strukt) = self.structs.iter().find(|s| s.name == *name) {
-                    let mut fields: Vec<(&String, &LirTy)> = strukt.fields.iter().collect();
+                    let dummy_key = "_dummy".to_string();
+                    let mut fields: Vec<(&String, &LirTy)> = if strukt.fields.is_empty() {
+                        vec![(&dummy_key, &LirTy::UInt8)]
+                    } else {
+                        strukt.fields.iter().collect()
+                    };
+
                     fields.sort_by(|a, b| a.0.cmp(b.0));
 
                     for (_, field_ty) in fields {

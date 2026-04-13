@@ -47,17 +47,17 @@ typedef unsigned long uint32_t;
 
 /* Define the noreturn macro based on the compiler */
 #if defined(_MSC_VER)
-    /* Microsoft Visual C++ */
-    #define PANIC_NORETURN __declspec(noreturn)
+/* Microsoft Visual C++ */
+#define PANIC_NORETURN __declspec(noreturn)
 #elif defined(__GNUC__) || defined(__clang__) || defined(__TINYC__) || defined(__INTEL_COMPILER)
-    /* GCC, Clang, TCC, and Intel CC all support GNU-style attributes */
-    #define PANIC_NORETURN __attribute__((noreturn))
+/* GCC, Clang, TCC, and Intel CC all support GNU-style attributes */
+#define PANIC_NORETURN __attribute__((noreturn))
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-    /* Fallback for any other standard C11 compiler */
-    #define PANIC_NORETURN _Noreturn
+/* Fallback for any other standard C11 compiler */
+#define PANIC_NORETURN _Noreturn
 #else
-    /* Fallback for unknown compilers */
-    #define PANIC_NORETURN
+/* Fallback for unknown compilers */
+#define PANIC_NORETURN
 #endif
 
 /* Aborts the process after printing a panic message. */
@@ -95,7 +95,7 @@ extern inline uint64_t atlas77_input_impl(uint8_t *buf, uint64_t size)
     return len;
 }
 
-int64_t clocks_per_sec()
+int64_t clocks_per_sec(void)
 {
     return CLOCKS_PER_SEC;
 }

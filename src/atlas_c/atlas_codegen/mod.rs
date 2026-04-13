@@ -223,19 +223,23 @@ impl CCodeGen {
 
     fn codegen_union(&mut self, union: &LirUnion) {
         let union_name = Self::c_ident(&union.name);
-        let mut union_def = format!("typedef union {} {{\n", union_name);
+        let mut union_def = format!("union {} {{\n", union_name);
         for (variant_name, variant_type) in union.variants.iter() {
             let variant_type_str = self.codegen_type(variant_type);
             union_def.push_str(&format!("\t{} {};\n", variant_type_str, variant_name));
         }
-        union_def.push_str(&format!("}} {};\n\n", union_name));
+        union_def.push_str("};\n\n");
         self.union_names.push(union.name.clone());
         Self::write_to_file(&mut self.c_header, &union_def, self.indent_level);
     }
 
     fn codegen_struct(&mut self, strukt: &LirStruct) {
         let struct_name = Self::c_ident(&strukt.name);
-        let mut struct_def = format!("typedef struct {} {{\n", struct_name);
+        let mut struct_def = format!("struct {} {{\n", struct_name);
+        if strukt.fields.is_empty() {
+            // C doesn't allow empty structs, so we add a dummy field if there are no fields
+            struct_def.push_str("\tuint8_t _dummy;\n");
+        }
         for (field_name, field_type) in strukt.fields.iter() {
             let field_sig = match field_type {
                 LirTy::ArrayTy { .. } => {
@@ -245,7 +249,7 @@ impl CCodeGen {
             };
             struct_def.push_str(&field_sig);
         }
-        struct_def.push_str(&format!("}} {};\n\n", struct_name));
+        struct_def.push_str("};\n\n");
         self.struct_names.push(strukt.name.clone());
         Self::write_to_file(&mut self.c_header, &struct_def, self.indent_level);
     }
@@ -277,6 +281,9 @@ impl CCodeGen {
     fn codegen_signature(&mut self, name: &str, args: &[LirTy], ret: &LirTy) -> String {
         let mangled_name = Self::c_ident(name);
         let mut prototype = format!("{}(", self.codegen_return_type(ret, &mangled_name));
+        if args.is_empty() {
+            prototype.push_str("void");
+        }
         for (i, arg) in args.iter().enumerate() {
             let arg_sig = self.codegen_declaration(arg, &format!("arg_{}", i));
             self.codegen_type(arg);
@@ -325,6 +332,10 @@ impl CCodeGen {
     }
 
     fn codegen_return_type(&mut self, ty: &LirTy, name: &str) -> String {
+        if name == "main" {
+            // The main function in C must return int, so we override the return type to be int if the function is named "main"
+            return "int main".to_string();
+        }
         match ty {
             LirTy::FnPtr { ret, args } => {
                 let ret_str = self.codegen_type(ret);
@@ -387,7 +398,7 @@ impl CCodeGen {
         // Let's write the label
         Self::write_to_file(
             &mut self.c_file,
-            &format!("{}:", block.label),
+            &format!("{}: ;\n", block.label),
             self.indent_level - 1,
         );
         for instr in block.instructions.iter() {
@@ -831,6 +842,10 @@ impl CCodeGen {
                 let type_str = self.codegen_type(ty);
                 let type_name_str = type_str.trim_end_matches('*').to_string();
                 let mut field_inits: Vec<String> = Vec::new();
+                if field_values.is_empty() {
+                    // C doesn't allow empty structs, so we add a dummy field if there are no fields
+                    field_inits.push("._dummy = 'A'".to_string());
+                }
                 for (field_name, field_value) in field_values.iter() {
                     let value_str = self.codegen_operand(field_value);
                     field_inits.push(format!(".{} = {}", field_name, value_str));
