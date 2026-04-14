@@ -221,23 +221,35 @@ impl<'hir> HirOwnershipPass<'hir> {
                     let mut then_stack = scope_stack.clone();
                     if_else.then_branch =
                         self.transform_block(if_else.then_branch, &mut then_stack);
+                    let then_terminates =
+                        self.statements_guaranteed_return(&if_else.then_branch.statements);
 
                     let mut else_stack: Option<Vec<ScopeFrame<'hir>>> = None;
+                    let mut else_terminates = false;
                     if let Some(else_branch) = if_else.else_branch.take() {
                         let mut local_else_stack = scope_stack.clone();
-                        if_else.else_branch =
-                            Some(self.transform_block(else_branch, &mut local_else_stack));
+                        let transformed_else =
+                            self.transform_block(else_branch, &mut local_else_stack);
+                        else_terminates =
+                            self.statements_guaranteed_return(&transformed_else.statements);
+                        if_else.else_branch = Some(transformed_else);
                         else_stack = Some(local_else_stack);
                     }
 
-                    self.merge_control_flow_states(scope_stack, &then_stack, else_stack.as_deref());
+                    self.merge_control_flow_states(
+                        scope_stack,
+                        &then_stack,
+                        else_stack.as_deref(),
+                        then_terminates,
+                        else_terminates,
+                    );
                     statements.push(HirStatement::IfElse(if_else));
                 }
                 HirStatement::While(mut while_stmt) => {
                     self.validate_expr(&while_stmt.condition, scope_stack);
                     let mut loop_stack = scope_stack.clone();
                     while_stmt.body = self.transform_block(while_stmt.body, &mut loop_stack);
-                    self.merge_control_flow_states(scope_stack, &loop_stack, None);
+                    self.merge_control_flow_states(scope_stack, &loop_stack, None, false, false);
                     statements.push(HirStatement::While(while_stmt));
                 }
                 HirStatement::Break(span) => statements.push(HirStatement::Break(span)),
@@ -246,9 +258,10 @@ impl<'hir> HirOwnershipPass<'hir> {
         }
 
         // Block exit RAII: destroy surviving locals declared in this scope in reverse order.
-        // When the block ends with an explicit return, return handling already emits
-        // the required scope drops and preserves returned ownership transfer.
-        if !matches!(statements.last(), Some(HirStatement::Return(_)))
+        // When the block has a guaranteed return path at its tail (direct return or
+        // if/else where both branches return), return handling already emits required
+        // drops and preserves returned ownership transfer.
+        if !self.statements_guaranteed_return(&statements)
             && let Some(frame) = scope_stack.last()
         {
             let mut tail_drops = Vec::new();
@@ -267,6 +280,29 @@ impl<'hir> HirOwnershipPass<'hir> {
         HirBlock {
             span: block.span,
             statements,
+        }
+    }
+
+    fn statements_guaranteed_return(&self, statements: &[HirStatement<'hir>]) -> bool {
+        match statements.last() {
+            Some(stmt) => self.statement_guaranteed_return(stmt),
+            None => false,
+        }
+    }
+
+    fn statement_guaranteed_return(&self, stmt: &HirStatement<'hir>) -> bool {
+        match stmt {
+            HirStatement::Return(_) => true,
+            HirStatement::Block(block) => self.statements_guaranteed_return(&block.statements),
+            HirStatement::IfElse(if_else) => {
+                let then_returns =
+                    self.statements_guaranteed_return(&if_else.then_branch.statements);
+                let else_returns = if_else.else_branch.as_ref().is_some_and(|else_block| {
+                    self.statements_guaranteed_return(&else_block.statements)
+                });
+                then_returns && else_returns
+            }
+            _ => false,
         }
     }
 
@@ -693,6 +729,8 @@ impl<'hir> HirOwnershipPass<'hir> {
         base_stack: &mut [ScopeFrame<'hir>],
         then_stack: &[ScopeFrame<'hir>],
         else_stack: Option<&[ScopeFrame<'hir>]>,
+        then_terminates: bool,
+        else_terminates: bool,
     ) {
         for (i, base_frame) in base_stack.iter_mut().enumerate() {
             let Some(then_frame) = then_stack.get(i) else {
@@ -716,7 +754,17 @@ impl<'hir> HirOwnershipPass<'hir> {
                     .and_then(|frame| frame.states.get(name).cloned())
                     .unwrap_or_else(|| base_state.clone());
 
-                let merged = self.merge_join_state(base_state, then_state, else_state);
+                let merged = if then_terminates && !else_terminates {
+                    else_state
+                } else if !then_terminates && else_terminates {
+                    then_state
+                } else if then_terminates && else_terminates {
+                    // No path reaches the join point; keep base state unchanged to avoid
+                    // introducing conditional moved/deleted noise into unreachable code.
+                    base_state
+                } else {
+                    self.merge_join_state(base_state, then_state, else_state)
+                };
                 base_frame.states.insert(name, merged);
             }
         }
