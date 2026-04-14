@@ -19,6 +19,14 @@ namespace std {
     //! [!Note] This is a low-level primitive and should be used with care.
     public extern fun move<T>(from: T) -> T;
 
+    public fun take<T: std::default>(from: *const T) -> T
+    {
+        let val = std::ptr::read(from);
+        std::ptr::write(from, T::default());
+        // We move it to ensure no issues, but tbf, it should work without `std::move`
+        return std::move(val);
+    }
+
     // Type that are `std::trivially_copyable` are always `std::copyable`,
     // though it doesn't guarantee to have a `.copy()` method.
     public fun copy<T: std::copyable>(from: *const T) -> T
