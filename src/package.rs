@@ -156,6 +156,7 @@ pub fn package_c_header(
         collect_composites_and_enums(
             decl,
             &parsed.source,
+            &namespace,
             &mut composites,
             &mut enums,
             &mut skipped,
@@ -204,7 +205,7 @@ pub fn package_c_header(
                 is_void_return,
                 param_conversions,
                 return_conversion,
-            )) = extract_function_decl(decl, &init_decl.node)
+            )) = extract_function_decl(decl, &init_decl.node, &namespace)
             else {
                 continue;
             };
@@ -429,14 +430,15 @@ fn atlas_function_signature(
     params: &[lang_c::span::Node<ParameterDeclaration>],
     return_specifiers: &[lang_c::span::Node<DeclarationSpecifier>],
     return_pointer_depth: usize,
+    namespace: &str,
 ) -> String {
     let mut sig = String::new();
     sig.push_str("fun ");
     sig.push_str(name);
     sig.push('(');
-    sig.push_str(&atlas_params(params).join(", "));
+    sig.push_str(&atlas_params(params, namespace).join(", "));
     sig.push(')');
-    let ret = atlas_return_type(return_specifiers, return_pointer_depth);
+    let ret = atlas_return_type(return_specifiers, return_pointer_depth, namespace);
     if ret != "unit" {
         sig.push_str(" -> ");
         sig.push_str(&ret);
@@ -445,14 +447,17 @@ fn atlas_function_signature(
     sig
 }
 
-fn atlas_params(params: &[lang_c::span::Node<ParameterDeclaration>]) -> Vec<String> {
+fn atlas_params(
+    params: &[lang_c::span::Node<ParameterDeclaration>],
+    namespace: &str,
+) -> Vec<String> {
     let mut out = Vec::new();
     for (idx, parameter) in params.iter().enumerate() {
         if parameter.node.declarator.is_none() && is_void_parameter(&parameter.node) {
             continue;
         }
 
-        let base = atlas_type_from_specifiers(&parameter.node.specifiers);
+        let base = atlas_type_from_specifiers(&parameter.node.specifiers, namespace);
         let pointer_depth = parameter
             .node
             .declarator
@@ -476,12 +481,13 @@ fn atlas_params(params: &[lang_c::span::Node<ParameterDeclaration>]) -> Vec<Stri
 fn atlas_return_type(
     return_specifiers: &[lang_c::span::Node<DeclarationSpecifier>],
     pointer_depth: usize,
+    namespace: &str,
 ) -> String {
-    let base = atlas_type_from_specifiers(return_specifiers);
+    let base = atlas_type_from_specifiers(return_specifiers, namespace);
     pointer_wrap(base, pointer_depth)
 }
 
-fn c_type_string_to_atlas(c_type: &str) -> String {
+fn c_type_string_to_atlas(c_type: &str, namespace: &str) -> String {
     let raw = c_type.trim();
     if raw.is_empty() {
         return "unit".to_owned();
@@ -515,7 +521,7 @@ fn c_type_string_to_atlas(c_type: &str) -> String {
         "float" => "float32".to_owned(),
         "double" => "float64".to_owned(),
         "_Bool" | "bool" => "bool".to_owned(),
-        other => other.to_owned(),
+        other => format!("{}::{}", namespace, other),
     };
 
     if pointer_depth == 0 {
@@ -532,6 +538,7 @@ fn c_type_string_to_atlas(c_type: &str) -> String {
 fn collect_composites_and_enums(
     decl: &Declaration,
     source: &str,
+    namespace: &str,
     composites: &mut Vec<CompositeDecl>,
     enums: &mut Vec<EnumDecl>,
     skipped: &mut Vec<SkipInfo>,
@@ -551,7 +558,9 @@ fn collect_composites_and_enums(
 
         match &ty.node {
             TypeSpecifier::Struct(st) => {
-                if let Some(comp) = build_composite_from_struct(st, typedef_alias_name.as_deref()) {
+                if let Some(comp) =
+                    build_composite_from_struct(st, typedef_alias_name.as_deref(), namespace)
+                {
                     composites.push(comp);
                 }
             }
@@ -582,6 +591,7 @@ fn collect_composites_and_enums(
 fn build_composite_from_struct(
     st: &lang_c::span::Node<StructType>,
     fallback_name: Option<&str>,
+    namespace: &str,
 ) -> Option<CompositeDecl> {
     let kind = match st.node.kind.node {
         lang_c::ast::StructKind::Struct => CompositeKind::Struct,
@@ -597,22 +607,30 @@ fn build_composite_from_struct(
     let mut fields: Vec<CompositeField> = Vec::new();
     if let Some(decls) = &st.node.declarations {
         for field_decl in decls {
-            collect_fields_from_struct_decl(&field_decl.node, &mut fields);
+            collect_fields_from_struct_decl(&field_decl.node, namespace, &mut fields);
         }
     }
 
     Some(CompositeDecl { kind, name, fields })
 }
 
-fn collect_fields_from_struct_decl(field_decl: &StructDeclaration, out: &mut Vec<CompositeField>) {
+fn collect_fields_from_struct_decl(
+    field_decl: &StructDeclaration,
+    namespace: &str,
+    out: &mut Vec<CompositeField>,
+) {
     let StructDeclaration::Field(field_node) = field_decl else {
         return;
     };
-    collect_fields_from_struct_field(&field_node.node, out);
+    collect_fields_from_struct_field(&field_node.node, namespace, out);
 }
 
-fn collect_fields_from_struct_field(field: &StructField, out: &mut Vec<CompositeField>) {
-    let base = atlas_type_from_specifier_qualifiers(&field.specifiers);
+fn collect_fields_from_struct_field(
+    field: &StructField,
+    namespace: &str,
+    out: &mut Vec<CompositeField>,
+) {
+    let base = atlas_type_from_specifier_qualifiers(&field.specifiers, namespace);
     for declarator in &field.declarators {
         let Some(named_decl) = &declarator.node.declarator else {
             continue;
@@ -657,7 +675,10 @@ fn build_enum_from_enum_type(
     Some(EnumDecl { name, variants })
 }
 
-fn atlas_type_from_specifiers(specifiers: &[lang_c::span::Node<DeclarationSpecifier>]) -> String {
+fn atlas_type_from_specifiers(
+    specifiers: &[lang_c::span::Node<DeclarationSpecifier>],
+    namespace: &str,
+) -> String {
     let mut words: Vec<String> = Vec::new();
 
     for spec in specifiers {
@@ -694,11 +715,12 @@ fn atlas_type_from_specifiers(specifiers: &[lang_c::span::Node<DeclarationSpecif
         }
     }
 
-    c_type_string_to_atlas(&words.join(" "))
+    c_type_string_to_atlas(&words.join(" "), namespace)
 }
 
 fn atlas_type_from_specifier_qualifiers(
     specifiers: &[lang_c::span::Node<SpecifierQualifier>],
+    namespace: &str,
 ) -> String {
     let mut words: Vec<String> = Vec::new();
     for spec in specifiers {
@@ -730,7 +752,7 @@ fn atlas_type_from_specifier_qualifiers(
             SpecifierQualifier::TypeQualifier(_) | SpecifierQualifier::Extension(_) => {}
         }
     }
-    c_type_string_to_atlas(&words.join(" "))
+    c_type_string_to_atlas(&words.join(" "), namespace)
 }
 
 fn pointer_wrap(base: String, pointer_depth: usize) -> String {
@@ -846,7 +868,11 @@ type FunDecl = (
     ReturnConversion,
 );
 
-fn extract_function_decl(decl: &Declaration, init_decl: &InitDeclarator) -> Option<FunDecl> {
+fn extract_function_decl(
+    decl: &Declaration,
+    init_decl: &InitDeclarator,
+    namespace: &str,
+) -> Option<FunDecl> {
     if init_decl.initializer.is_some() {
         return None;
     }
@@ -905,6 +931,7 @@ fn extract_function_decl(decl: &Declaration, init_decl: &InitDeclarator) -> Opti
         &func_decl.parameters,
         &decl.specifiers,
         return_pointer_depth,
+        namespace,
     );
 
     Some((
