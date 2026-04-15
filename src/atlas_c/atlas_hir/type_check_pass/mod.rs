@@ -2074,6 +2074,27 @@ impl<'hir> TypeChecker<'hir> {
                 }
             }
             HirExpr::Ident(i) => {
+                if let Some(func) = self.signature.functions.get(i.name).copied() {
+                    if !func.generics.is_empty() {
+                        return Err(Self::type_mismatch_err(
+                            "generic function reference with explicit type arguments",
+                            &i.span,
+                            i.name,
+                            &func.span,
+                        ));
+                    }
+
+                    let fn_ty = self.arena.types().get_function_ty_with_spans(
+                        func.params.iter().map(|param| param.ty).collect(),
+                        func.params.iter().map(|param| param.ty_span).collect(),
+                        self.arena.intern(func.return_ty.clone()),
+                        func.return_ty_span.unwrap_or(func.span),
+                        func.span,
+                    );
+                    i.ty = fn_ty;
+                    return Ok(fn_ty);
+                }
+
                 if let Some(static_access) = self.build_static_access_from_qualified_ident(i) {
                     let mut rewritten = HirExpr::StaticAccess(static_access);
                     let ty = self.check_expr(&mut rewritten)?;
@@ -2740,10 +2761,15 @@ impl<'hir> TypeChecker<'hir> {
             return None;
         }
 
+        let target_name_interned = self.arena.names().get(target_name);
+        if !self.signature.structs.contains_key(target_name_interned) {
+            return None;
+        }
+
         let target = self
             .arena
             .types()
-            .get_named_ty(self.arena.names().get(target_name), ident.span);
+            .get_named_ty(target_name_interned, ident.span);
         Some(expr::HirStaticAccessExpr {
             span: ident.span,
             target,
