@@ -1241,6 +1241,8 @@ impl<'hir> TypeChecker<'hir> {
                         | HirTy::Char(_)
                         | HirTy::String(_)
                         | HirTy::PtrTy(_)
+                        // function can cast, but it should be Undefined Behaviour
+                        | HirTy::Function(_)
                 );
                 if !can_cast && !c.target_ty.is_ptr() {
                     return Err(Self::type_mismatch_err(
