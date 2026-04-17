@@ -17,6 +17,7 @@ declare_warning_type!(
         UnnecessaryCopyDueToLaterBorrows(UnnecessaryCopyDueToLaterBorrowsWarning),
         UnionFieldCannotBeAutomaticallyDeleted(UnionFieldCannotBeAutomaticallyDeletedWarning),
         UnsafeRawPointerStruct(UnsafeRawPointerStructWarning),
+        SpecialMethodMightHaveWrongSignature(SpecialMethodMightHaveWrongSignatureWarning),
     }
 );
 
@@ -167,7 +168,7 @@ pub struct UnionFieldCannotBeAutomaticallyDeletedWarning {
 }
 
 #[derive(Error, Diagnostic, Debug)]
-#[diagnostic(code(atlas::ownership::move_in_loop), severity(warning))]
+#[diagnostic(code(sema::ownership::move_in_loop), severity(warning))]
 #[error("Move inside loop")]
 pub struct MoveInLoopWarning {
     #[source_code]
@@ -180,4 +181,19 @@ pub struct MoveInLoopWarning {
     pub loop_span: Span,
 
     pub var_name: String,
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(code(sema::potential_wrong_signature), severity(warning))]
+#[error(
+    "Special method `{method_name}` might have the wrong signature `{signature}`\n\t(expected `{expected_signature}`)"
+)]
+pub struct SpecialMethodMightHaveWrongSignatureWarning {
+    pub signature: String,
+    pub expected_signature: String,
+    pub method_name: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label = "Method `{method_name}` is a special method but its signature `{signature}` does not match the expected signature `{expected_signature}` for this method, which may lead to it not being recognized as a special method and not being called in certain situations"]
+    pub span: Span,
 }

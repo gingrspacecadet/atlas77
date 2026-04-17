@@ -1214,10 +1214,9 @@ impl<'hir> TypeChecker<'hir> {
                     },
                     Some(HirUnaryOp::Not) => {
                         // If it's a boolean, we do logical not, otherwise we do bitwise not
-                        if HirTyId::from(ty) == HirTyId::compute_boolean_ty_id() {
-                            u.ty = ty;
-                            Ok(ty)
-                        } else if TypeChecker::is_binary_comparable_type(ty) {
+                        if HirTyId::from(ty) == HirTyId::compute_boolean_ty_id()
+                            || TypeChecker::is_binary_comparable_type(ty)
+                        {
                             u.ty = ty;
                             Ok(ty)
                         } else {

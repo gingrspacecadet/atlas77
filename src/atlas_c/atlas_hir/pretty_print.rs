@@ -244,8 +244,8 @@ impl HirPrettyPrinter {
     pub fn print_method_signature(&mut self, name: &str, method_sig: &HirStructMethodSignature) {
         self.write(&format!("fun {}(", name));
         match &method_sig.modifier {
-            HirStructMethodModifier::Const => self.write("&const this"),
-            HirStructMethodModifier::Mutable => self.write("&this"),
+            HirStructMethodModifier::Const => self.write("*const this"),
+            HirStructMethodModifier::Mutable => self.write("*this"),
             HirStructMethodModifier::Consuming => self.write("this"),
             HirStructMethodModifier::Static => {}
         }

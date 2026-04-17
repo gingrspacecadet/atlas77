@@ -297,6 +297,32 @@ impl<'hir> HirGenericPool<'hir> {
                         }
                     }
                     HirGenericConstraintKind::Std {
+                        name: "hashable",
+                        span,
+                    } => {
+                        if !self.implements_std_hashable(module, instantiated_ty) {
+                            let origin_path = declaration_span.path;
+                            let origin_src = utils::get_file_content(origin_path).unwrap();
+                            let origin = TypeDoesNotImplementRequiredConstraintOrigin {
+                                span: *span,
+                                src: NamedSource::new(origin_path, origin_src),
+                            };
+                            let err_path = instantiated_generic.span.path;
+                            let err_src = utils::get_file_content(err_path).unwrap();
+                            let err = TypeDoesNotImplementRequiredConstraintError {
+                                ty: format!("{}", instantiated_ty),
+                                span: instantiated_generic.span,
+                                constraint: format!("{}", kind),
+                                src: NamedSource::new(err_path, err_src),
+                                origin,
+                            };
+                            eprintln!("{:?}", Into::<miette::Report>::into(err));
+                            are_constraints_satisfied = false;
+                        } else {
+                            continue;
+                        }
+                    }
+                    HirGenericConstraintKind::Std {
                         name: "trivially_copyable",
                         span,
                     } => {
@@ -360,6 +386,38 @@ impl<'hir> HirGenericPool<'hir> {
         ty: &HirTy<'hir>,
     ) -> bool {
         ty.is_copyable(module)
+    }
+
+    pub fn implements_std_hashable(
+        &self,
+        module: &HirModuleSignature<'hir>,
+        ty: &HirTy<'hir>,
+    ) -> bool {
+        match ty {
+            HirTy::Boolean(_)
+            | HirTy::Integer(_)
+            | HirTy::Float(_)
+            | HirTy::Char(_)
+            | HirTy::String(_)
+            | HirTy::UnsignedInteger(_)
+            | HirTy::PtrTy(_)
+            | HirTy::Function(_)
+            | HirTy::Slice(_)
+            | HirTy::Unit(_)
+            | HirTy::LiteralInteger(_)
+            | HirTy::LiteralUnsignedInteger(_)
+            | HirTy::LiteralFloat(_) => true,
+            HirTy::Named(n) => module
+                .structs
+                .get(n.name)
+                .is_some_and(|sig| sig.is_std_hashable),
+            HirTy::Generic(g) => module
+                .structs
+                .get(g.name)
+                .is_some_and(|sig| sig.is_std_hashable),
+            HirTy::InlineArray(arr) => self.implements_std_hashable(module, arr.inner),
+            _ => false,
+        }
     }
 
     pub fn implements_std_default(

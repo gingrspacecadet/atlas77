@@ -10,6 +10,14 @@ public:
         return (this->value * 11400714819323198485u) + 1469598103934665603u;
     }
 
+    fun copy(*const this) -> Key {
+        return Key { .value = this->value };
+    }
+
+    fun default() -> Key {
+        return Key { .value = 0u };
+    }
+
     fun eq(*const this, other: *const Key) -> bool {
         return this->value == other->value;
     }

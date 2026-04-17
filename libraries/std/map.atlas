@@ -1,14 +1,14 @@
 //! Robin Hood open-addressing hash map.
 //!
 //! Current assumption for Atlas77 constraints:
-//! - `K` exposes a `hash()` method returning `uint64`.
+//! - `K` exposes a `hash(*const this) -> uint64` method 
 //! - `K` exposes `eq(*const K)` for key equality.
 
 import "std/io";
 import "std/memory";
 
 namespace std {
-    private struct map_pair<K, V> {
+    private struct map_pair<K: std::hashable, V> {
     public:
         key: K;
         value: V;
@@ -20,7 +20,7 @@ namespace std {
     }
 
     #[std::trivially_copyable]
-    private struct map_bucket<K, V> {
+    private struct map_bucket<K: std::hashable, V> {
     public:
         occupied: bool;
         hash: uint64;
@@ -28,7 +28,7 @@ namespace std {
         pair: *std::map_pair<K, V>;
     }
 
-    public struct map<K, V> {
+    public struct map<K: std::hashable, V> {
     private:
         buckets: *std::map_bucket<K, V>;
         length: uint64;

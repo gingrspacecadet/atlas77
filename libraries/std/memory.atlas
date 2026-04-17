@@ -23,7 +23,7 @@ namespace std {
     //! [!Note] This is a low-level primitive and should be used with care.
     public extern fun move<T>(from: T) -> T;
 
-    public fun take<T: std::default>(from: *const T) -> T
+    public fun take<T: std::default>(from: *T) -> T
     {
         let val = std::ptr::read(from);
         std::ptr::write(from, T::default());
@@ -46,9 +46,9 @@ namespace std {
 
     namespace ptr {
         #[std::intrinsic]
-        public extern fun read(ptr: *T) -> T;
+        public extern fun read<T>(ptr: *T) -> T;
         #[std::intrinsic]
-        public extern fun write(ptr: *T, val: T);
+        public extern fun write<T>(ptr: *T, val: T);
 
         public fun swap<T>(a: *T, b: *T) {
             let temp = std::ptr::read(a);
