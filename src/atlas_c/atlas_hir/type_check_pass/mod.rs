@@ -395,7 +395,7 @@ impl<'hir> TypeChecker<'hir> {
             // Destructor-bearing types are never trivially copyable.
             // This keeps ownership/drop semantics coherent even if users applied
             // #[std::trivially_copyable] manually.
-            let is_trivially_copyable = has_destructor || strct.signature.flag.is_non_copyable();
+            let is_trivially_copyable = !(has_destructor || strct.signature.flag.is_non_copyable());
 
             strct.signature.is_trivially_copyable = is_trivially_copyable;
             if is_trivially_copyable {

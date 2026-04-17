@@ -53,6 +53,38 @@ impl CCodeGen {
         if out.is_empty() { "_".to_string() } else { out }
     }
 
+    fn escape_c_string(value: &str) -> String {
+        let mut out = String::with_capacity(value.len() + 2);
+        out.push('"');
+        for byte in value.as_bytes() {
+            match byte {
+                b'\\' => out.push_str("\\\\"),
+                b'"' => out.push_str("\\\""),
+                b'\n' => out.push_str("\\n"),
+                b'\r' => out.push_str("\\r"),
+                b'\t' => out.push_str("\\t"),
+                b'\0' => out.push_str("\\0"),
+                0x20..=0x7e => out.push(*byte as char),
+                _ => out.push_str(&format!("\\x{:02x}", byte)),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    fn escape_c_char(value: char) -> String {
+        match value {
+            '\0' => "'\\0'".to_string(),
+            '\n' => "'\\n'".to_string(),
+            '\r' => "'\\r'".to_string(),
+            '\t' => "'\\t'".to_string(),
+            '\\' => "'\\\\'".to_string(),
+            '\'' => "'\\''".to_string(),
+            c if c.is_ascii_graphic() || c == ' ' => format!("'{}'", c),
+            c => format!("UINT32_C({})", c as u32),
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             c_file: String::new(),
@@ -928,22 +960,8 @@ impl CCodeGen {
                 ConstantValue::UInt(u) => format!("{}", u),
                 ConstantValue::Float(f) => format!("{}", f),
                 ConstantValue::Bool(b) => format!("{}", b),
-                ConstantValue::Char(c) => {
-                    let escaped = match c {
-                        '\0' => "\\0".to_string(),
-                        '\n' => "\\n".to_string(),
-                        '\r' => "\\r".to_string(),
-                        '\t' => "\\t".to_string(),
-                        '\\' => "\\\\".to_string(),
-                        '\'' => "\\'".to_string(),
-                        _ if c.is_ascii_graphic() || (*c) == ' ' => c.to_string(),
-                        _ => format!("\\x{:02x}", (*c) as u32),
-                    };
-                    format!("'{}'", escaped)
-                }
-                // We need to keep all the special characters in strings escaped
-                // e.g.: \n, \t, etc.
-                ConstantValue::String(s) => format!("\"{}\"", s.escape_default()),
+                ConstantValue::Char(c) => Self::escape_c_char(*c),
+                ConstantValue::String(s) => Self::escape_c_string(s),
                 ConstantValue::Unit => "void".to_string(),
                 _ => unimplemented!("Constant codegen not implemented for {:?}", c),
             },
@@ -951,19 +969,7 @@ impl CCodeGen {
             LirOperand::ImmInt(i) => format!("{}", i),
             LirOperand::ImmUInt(u) => format!("{}", u),
             LirOperand::ImmFloat(f) => format!("{}", f),
-            LirOperand::ImmChar(c) => {
-                let escaped = match c {
-                    '\0' => "\\0".to_string(),
-                    '\n' => "\\n".to_string(),
-                    '\r' => "\\r".to_string(),
-                    '\t' => "\\t".to_string(),
-                    '\\' => "\\\\".to_string(),
-                    '\'' => "\\'".to_string(),
-                    _ if c.is_ascii_graphic() || (*c) == ' ' => c.to_string(),
-                    _ => format!("\\x{:02x}", (*c) as u32),
-                };
-                format!("'{}'", escaped)
-            }
+            LirOperand::ImmChar(c) => Self::escape_c_char(*c),
             LirOperand::ImmUnit => "NULL".to_string(),
             LirOperand::Deref(d) => format!("(*{})", self.codegen_operand(d)),
             LirOperand::AsRef(a) => {
@@ -1009,5 +1015,26 @@ impl CCodeGen {
     fn write_to_top(file: &mut String, content: &str) {
         let entry = format!("{}\n", content);
         file.insert_str(0, &entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CCodeGen;
+
+    #[test]
+    fn escapes_string_literals_as_c_bytes() {
+        assert_eq!(CCodeGen::escape_c_string("a\0b"), "\"a\\0b\"");
+        assert_eq!(
+            CCodeGen::escape_c_string("Time: %fµs\n"),
+            "\"Time: %f\\xc2\\xb5s\\n\""
+        );
+    }
+
+    #[test]
+    fn escapes_char_literals_without_unicode_escape_default() {
+        assert_eq!(CCodeGen::escape_c_char('\0'), "'\\0'");
+        assert_eq!(CCodeGen::escape_c_char('a'), "'a'");
+        assert_eq!(CCodeGen::escape_c_char('µ'), "UINT32_C(181)");
     }
 }
