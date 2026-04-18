@@ -6,7 +6,6 @@ use super::{
     expr,
     stmt::{HirBlock, HirExprStmt, HirStatement},
 };
-use crate::atlas_c::atlas_hir::item::{HirStructDestructor, HirUnion};
 use crate::atlas_c::atlas_hir::pretty_print::HirPrettyPrinter;
 use crate::atlas_c::atlas_hir::signature::{
     HirFunctionParameterSignature, HirFunctionSignature, HirMethodAttribute,
@@ -53,6 +52,10 @@ use crate::atlas_c::atlas_hir::{
         VariableNameAlreadyDefinedError,
     },
     warning::UnsafeRawPointerStructWarning,
+};
+use crate::atlas_c::atlas_hir::{
+    item::{HirStructDestructor, HirUnion},
+    warning::UnionFieldCannotBeAutomaticallyDeletedWarning,
 };
 use crate::atlas_c::utils;
 use crate::atlas_c::utils::Span;
@@ -235,6 +238,7 @@ impl<'hir> TypeChecker<'hir> {
 
     fn type_requires_drop(
         &self,
+        field_span: Span,
         ty: &'hir HirTy<'hir>,
         requires_drop: &HashMap<&'hir str, bool>,
     ) -> bool {
@@ -253,17 +257,32 @@ impl<'hir> TypeChecker<'hir> {
             | HirTy::LiteralFloat(_)
             | HirTy::LiteralUnsignedInteger(_)
             | HirTy::Uninitialized(_) => false,
-            HirTy::InlineArray(arr) => self.type_requires_drop(arr.inner, requires_drop),
+            HirTy::InlineArray(arr) => {
+                self.type_requires_drop(field_span, arr.inner, requires_drop)
+            }
             HirTy::Named(n) => {
-                if self.signature.enums.contains_key(n.name)
-                    || self.signature.unions.contains_key(n.name)
-                {
+                if self.signature.enums.contains_key(n.name) {
                     return false;
                 }
                 if let Some(sig) = self.signature.structs.get(n.name)
                     && sig.destructor.is_some()
                 {
                     return true;
+                }
+                if let Some(sig) = self.signature.unions.get(n.name) {
+                    sig.variants.iter().for_each(|(_, variant)| {
+                        if self.type_requires_drop(field_span, variant.ty, requires_drop) {
+                            Self::union_field_cannot_be_automatically_deleted_warning(
+                                &sig.name_span,
+                                n.name,
+                                variant.name,
+                                &variant.span,
+                                format!("{}", ty),
+                                field_span,
+                            );
+                        }
+                    });
+                    return false;
                 }
                 requires_drop.get(n.name).copied().unwrap_or(false)
             }
@@ -303,7 +322,7 @@ impl<'hir> TypeChecker<'hir> {
                     .signature
                     .fields
                     .values()
-                    .any(|field| self.type_requires_drop(field.ty, &requires_drop));
+                    .any(|field| self.type_requires_drop(field.span, field.ty, &requires_drop));
                 if needs_drop && !requires_drop.get(name).copied().unwrap_or(false) {
                     requires_drop.insert(*name, true);
                     changed = true;
@@ -334,7 +353,7 @@ impl<'hir> TypeChecker<'hir> {
         for (struct_name, struct_span, fields) in to_generate {
             let mut statements = Vec::new();
             for field in &fields {
-                if !self.type_requires_drop(field.ty, &requires_drop) {
+                if !self.type_requires_drop(field.span, field.ty, &requires_drop) {
                     continue;
                 }
 
@@ -3839,6 +3858,31 @@ impl<'hir> TypeChecker<'hir> {
             ty1: ty1.to_string(),
             ty2: ty2.to_string(),
         })
+    }
+
+    fn union_field_cannot_be_automatically_deleted_warning(
+        union_span: &Span,
+        union_name: &str,
+        variant_name: &str,
+        variant_span: &Span,
+        usage_loc_type: String,
+        usage_loc_span: Span,
+    ) {
+        let path = union_span.path;
+        let src = utils::get_file_content(path).unwrap();
+        let warning: ErrReport = HirWarning::UnionFieldCannotBeAutomaticallyDeleted(
+            UnionFieldCannotBeAutomaticallyDeletedWarning {
+                union_span: *union_span,
+                union_name: union_name.to_string(),
+                variant_name: variant_name.to_string(),
+                variant_span: *variant_span,
+                usage_loc_type,
+                usage_loc_span,
+                src: NamedSource::new(path, src),
+            },
+        )
+        .into();
+        eprintln!("{:?}", warning);
     }
 
     fn trying_to_cast_to_the_same_type_warning(span: &Span, ty: &str) {

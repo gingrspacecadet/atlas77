@@ -11,8 +11,6 @@ declare_warning_type!(
         ThisTypeIsStillUnstable(ThisTypeIsStillUnstableWarning),
         NameShouldBeInDifferentCase(NameShouldBeInDifferentCaseWarning),
         TryingToCastToTheSameType(TryingToCastToTheSameTypeWarning),
-        UseAfterMove(UseAfterMoveWarning),
-        MoveInLoop(MoveInLoopWarning),
         ConsumingMethodMayLeakThis(ConsumingMethodMayLeakThisWarning),
         UnnecessaryCopyDueToLaterBorrows(UnnecessaryCopyDueToLaterBorrowsWarning),
         UnionFieldCannotBeAutomaticallyDeleted(UnionFieldCannotBeAutomaticallyDeletedWarning),
@@ -40,25 +38,6 @@ pub struct UnsafeRawPointerStructWarning {
     #[label = "Raw pointer field declared here"]
     pub pointer_span: Span,
     pub struct_name: String,
-}
-
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(
-    code(sema::use_after_move),
-    severity(warning),
-    help(
-        "Accessing a moved-from value may be undefined at runtime; consider using a copy or std::move explicitly"
-    )
-)]
-#[error("Use of moved-from variable `{var_name}`")]
-pub struct UseAfterMoveWarning {
-    #[source_code]
-    pub src: NamedSource<String>,
-    #[label = "Use of moved-from variable `{var_name}`"]
-    pub access_span: Span,
-    #[label = "Value was moved from here"]
-    pub move_span: Span,
-    pub var_name: String,
 }
 
 #[derive(Error, Diagnostic, Debug)]
@@ -152,35 +131,27 @@ pub struct UnnecessaryCopyDueToLaterBorrowsWarning {
     code(sema::union_field_cannot_be_automatically_deleted),
     severity(warning),
     help(
-        "Unions require special handling for deletion. Consider implementing a custom destructor for this type."
+        "Unions require special handling for deletion. Consider implementing a custom destructor for your struct."
     )
 )]
 #[error(
-    "The compiler cannot automatically delete the union field `{field_name}` of struct `{struct_name}` as it may lead to undefined behavior"
+    "The compiler cannot automatically delete the union field `{variant_name}` because it requires drop and the compiler cannot know which variant is active at compile time"
 )]
 pub struct UnionFieldCannotBeAutomaticallyDeletedWarning {
     #[source_code]
     pub src: NamedSource<String>,
-    #[label = "Union field `{field_name}` cannot be automatically deleted here"]
-    pub span: Span,
-    pub field_name: String,
-    pub struct_name: String,
-}
 
-#[derive(Error, Diagnostic, Debug)]
-#[diagnostic(code(sema::ownership::move_in_loop), severity(warning))]
-#[error("Move inside loop")]
-pub struct MoveInLoopWarning {
-    #[source_code]
-    pub src: NamedSource<String>,
+    #[label = "Union field `{variant_name}` cannot be automatically deleted here."]
+    pub variant_span: Span,
+    pub variant_name: String,
 
-    #[label("Variable moved here")]
-    pub move_span: Span,
+    #[label = "Union `{union_name}` declared here"]
+    pub union_span: Span,
+    pub union_name: String,
 
-    #[label("Inside this loop (may execute multiple times)")]
-    pub loop_span: Span,
-
-    pub var_name: String,
+    #[label = "{usage_loc_type} `{variant_name}` is used here, which may lead to it not being properly deleted if it's the active variant when the struct is dropped"]
+    pub usage_loc_span: Span,
+    pub usage_loc_type: String,
 }
 
 #[derive(Error, Diagnostic, Debug)]

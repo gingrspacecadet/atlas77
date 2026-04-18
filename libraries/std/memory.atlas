@@ -16,7 +16,7 @@ namespace std {
         return std::calloc<T>(nelem, size_of<T>());
     }
     #[c_name("memcpy")]
-    public extern fun memcpy<T>(dest: *T, src: *T, size: uint64) -> *T;
+    public extern fun memcpy<T>(dest: *T, src: *const T, size: uint64) -> *T;
 
     #[std::intrinsic]
     //! Moves a value, invalidating the source. 

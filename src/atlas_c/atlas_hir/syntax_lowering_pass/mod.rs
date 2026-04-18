@@ -22,8 +22,7 @@ use crate::atlas_c::{
         arena::HirArena,
         error::{
             AssignmentCannotBeAnExpressionError, HirError, HirResult,
-            IncorrectIntrinsicCallArgumentsError, NonConstantValueError,
-            NullableTypeRequiresStdLibraryError, ReservedVariableNameError,
+            IncorrectIntrinsicCallArgumentsError, NonConstantValueError, ReservedVariableNameError,
             StructNameCannotBeOneLetterError, UnknownFileImportError, UnknownTypeError,
             UnsupportedExpr, UnsupportedItemError, UselessError,
         },
@@ -61,7 +60,7 @@ use crate::atlas_c::{
         ty::{HirGenericTy, HirNamedTy, HirTy},
         warning::{
             HirWarning, NameShouldBeInDifferentCaseWarning,
-            SpecialMethodMightHaveWrongSignatureWarning, ThisTypeIsStillUnstableWarning,
+            SpecialMethodMightHaveWrongSignatureWarning,
         },
     },
     utils::{self, Span},
@@ -2006,23 +2005,15 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 let ty = self.visit_ty(arr.inner)?;
                 self.arena.types().get_inline_arr_ty(ty, arr.size)
             }
-            AstType::Nullable(n) => {
-                if !self.using_std {
-                    let path = node.span().path;
-                    let src = crate::atlas_c::utils::get_file_content(path).unwrap();
-                    return Err(HirError::NullableTypeRequiresStdLibrary(
-                        NullableTypeRequiresStdLibraryError {
-                            span: node.span(),
-                            src: NamedSource::new(path, src),
-                        },
-                    ));
-                }
-                //They should not be unstable, but who knows
-                Self::nullable_types_are_unstable_warning(&node.span());
-                let ty = self.visit_ty(n.inner)?;
-                self.arena
-                    .types()
-                    .get_generic_ty("Option", vec![ty], n.span)
+            AstType::Nullable(_) => {
+                let path = node.span().path;
+                let src = utils::get_file_content(path)
+                    .unwrap_or_else(|_| panic!("Failed to open file {path}"));
+                return Err(HirError::UnknownType(UnknownTypeError {
+                    name: node.name(),
+                    span: node.span(),
+                    src: NamedSource::new(path, src),
+                }));
             }
             AstType::Generic(g) => {
                 let inner_types = g
@@ -2078,20 +2069,6 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             }
         };
         Ok(ty)
-    }
-
-    fn nullable_types_are_unstable_warning(span: &Span) {
-        let path = span.path;
-        let src = crate::atlas_c::utils::get_file_content(path).unwrap();
-        let report: ErrReport =
-            HirWarning::ThisTypeIsStillUnstable(ThisTypeIsStillUnstableWarning {
-                src: NamedSource::new(path, src),
-                span: *span,
-                type_name: "The nullable type".to_string(),
-                info: "Nullable types haven't been properly stabilized yet. Also they are just syntactic sugar for `optional<T>`".to_string(),
-            })
-            .into();
-        eprintln!("{:?}", report);
     }
 
     fn name_should_be_in_different_case_warning(

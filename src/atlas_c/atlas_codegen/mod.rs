@@ -265,7 +265,7 @@ impl CCodeGen {
         let union_name = Self::c_ident(&union.name);
         let mut union_def = format!("union {} {{\n", union_name);
         let mut variants: Vec<(&String, &LirTy)> = union.variants.iter().collect();
-        variants.sort_by(|(a, _), (b, _)| a.cmp(b));
+        variants.sort_by_key(|(a, _)| *a);
         for (variant_name, variant_type) in variants {
             let variant_type_str = self.codegen_type(variant_type);
             union_def.push_str(&format!("\t{} {};\n", variant_type_str, variant_name));
@@ -283,7 +283,7 @@ impl CCodeGen {
             struct_def.push_str("\tuint8_t _dummy;\n");
         }
         let mut fields: Vec<(&String, &LirTy)> = strukt.fields.iter().collect();
-        fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+        fields.sort_by_key(|(a, _)| *a);
         for (field_name, field_type) in fields {
             let field_sig = match field_type {
                 LirTy::ArrayTy { .. } => {
@@ -963,7 +963,7 @@ impl CCodeGen {
                 }
 
                 let mut fields: Vec<(&String, &LirOperand)> = field_values.iter().collect();
-                fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+                fields.sort_by_key(|(a, _)| *a);
 
                 let array_fields: HashSet<String> = if let LirTy::StructType(struct_name) = ty {
                     self.struct_field_tys
