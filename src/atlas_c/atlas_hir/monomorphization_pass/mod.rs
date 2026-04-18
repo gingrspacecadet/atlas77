@@ -534,6 +534,17 @@ impl<'hir> MonomorphizationPass<'hir> {
                 );
             }
         }
+        // Keep the concrete body variants in sync with signature variants.
+        for variant in new_union.variants.iter_mut() {
+            for (i, generic_constraint) in generic_constraints.iter().enumerate() {
+                variant.ty = self.change_inner_type(
+                    variant.ty,
+                    generic_constraint.generic_name,
+                    actual_type.inner[i].clone(),
+                    module,
+                );
+            }
+        }
         new_union.signature.generics = vec![];
         new_union.name = mangled_name;
         new_union.signature.name = mangled_name;

@@ -1602,15 +1602,19 @@ impl<'hir> HirLoweringPass<'hir> {
                 size: arr.size,
             },
             HirTy::Named(n) => {
-                let name = self
-                    .hir_module
-                    .signature
-                    .structs
-                    .get(n.name)
-                    .filter(|sig| sig.is_extern)
-                    .and_then(|sig| sig.c_name)
-                    .unwrap_or(n.name);
-                LirTy::StructType(name.to_string())
+                if self.hir_module.signature.unions.contains_key(n.name) {
+                    LirTy::UnionType(n.name.to_string())
+                } else {
+                    let name = self
+                        .hir_module
+                        .signature
+                        .structs
+                        .get(n.name)
+                        .filter(|sig| sig.is_extern)
+                        .and_then(|sig| sig.c_name)
+                        .unwrap_or(n.name);
+                    LirTy::StructType(name.to_string())
+                }
             }
             HirTy::Generic(g) => {
                 let mangled_name =
