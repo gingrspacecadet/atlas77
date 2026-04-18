@@ -44,6 +44,9 @@ typedef unsigned long uint32_t;
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 /* Define the noreturn macro based on the compiler */
 #if defined(_MSC_VER)
@@ -98,6 +101,53 @@ extern inline uint64_t atlas77_input_impl(uint8_t *buf, uint64_t size)
 int64_t clocks_per_sec(void)
 {
     return CLOCKS_PER_SEC;
+}
+
+// Return the amount of nanoseconds since the Unix epoch (January 1, 1970).
+int64_t atlas77_instant_now(void)
+{
+#if defined(_WIN32)
+    FILETIME ft;
+    ULARGE_INTEGER ticks;
+    /* Windows epoch (1601) to Unix epoch (1970), in 100ns units. */
+    const uint64_t EPOCH_DIFF_100NS = 116444736000000000ULL;
+
+#if defined(_WIN32_WINNT) && _WIN32_WINNT >= 0x0602
+    GetSystemTimePreciseAsFileTime(&ft);
+#else
+    GetSystemTimeAsFileTime(&ft);
+#endif
+
+    ticks.LowPart = ft.dwLowDateTime;
+    ticks.HighPart = ft.dwHighDateTime;
+    if (ticks.QuadPart < EPOCH_DIFF_100NS)
+    {
+        panic("Failed to get current time");
+    }
+    return (int64_t)((ticks.QuadPart - EPOCH_DIFF_100NS) * 100ULL);
+#elif defined(CLOCK_REALTIME)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+    {
+        panic("Failed to get current time");
+    }
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+#elif defined(TIME_UTC)
+    struct timespec ts;
+    if (timespec_get(&ts, TIME_UTC) == 0)
+    {
+        panic("Failed to get current time");
+    }
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+#else
+    /* Last-resort fallback: process CPU time, not wall-clock time. */
+    clock_t c = clock();
+    if (c == (clock_t)-1)
+    {
+        panic("Failed to get current time");
+    }
+    return ((int64_t)c * 1000000000LL) / (int64_t)CLOCKS_PER_SEC;
+#endif
 }
 
 static uint64_t atlas77_string_hash(const char *s)
