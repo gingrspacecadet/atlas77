@@ -53,7 +53,7 @@ use crate::atlas_c::{
             HirAssignStmt, HirBlock, HirExprStmt, HirIfElseStmt, HirReturn, HirStatement,
             HirVariableStmt, HirWhileStmt,
         },
-                ty::{HirGenericTy, HirNamedTy, HirTy},
+        ty::{HirGenericTy, HirNamedTy, HirTy},
         warning::{HirWarning, SpecialMethodMightHaveWrongSignatureWarning},
     },
     utils::{self, Span},
@@ -210,7 +210,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 let hir_func = self.visit_func(ast_function)?;
                 let qualified = self.qualified_name(ast_function.name.name);
                 let name = self.arena.names().get(&qualified);
-                
+
                 self.module_signature
                     .functions
                     .insert(name, hir_func.signature);
@@ -267,6 +267,17 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             AstItem::ExternFunction(ast_extern_func) => {
                 self.visit_extern_func(ast_extern_func)?;
             }
+            AstItem::ExternUnion(ast_union) => {
+                let hir_union = self.visit_union(ast_union)?;
+                let qualified = self.qualified_name(ast_union.name.name);
+                let union_name = self.arena.names().get(&qualified);
+                self.module_body
+                    .unions
+                    .insert(union_name, hir_union.clone());
+                self.module_signature
+                    .unions
+                    .insert(union_name, self.arena.intern(hir_union.signature.clone()));
+            }
             AstItem::Enum(e) => {
                 let hir_enum = self.visit_enum(e)?;
                 let qualified = self.qualified_name(e.name.name);
@@ -287,6 +298,15 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                     .unions
                     .insert(union_name, self.arena.intern(hir_union.signature.clone()));
             }
+            _ => {
+                let path = ast_item.span().path;
+                let src = utils::get_file_content(path).unwrap();
+                return Err(HirError::UnsupportedItem(UnsupportedItemError {
+                    span: ast_item.span(),
+                    item: format!("{:?}", ast_item),
+                    src: NamedSource::new(path, src),
+                }));
+            }
         }
         Ok(())
     }
@@ -294,7 +314,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
     fn visit_union(&mut self, ast_union: &'ast AstUnion<'ast>) -> HirResult<HirUnion<'hir>> {
         let qualified = self.qualified_name(ast_union.name.name);
         let name = self.arena.names().get(&qualified);
-        
+
         if name.len() == 1 {
             return Err(Self::name_single_character_error(&ast_union.name.span));
         }
@@ -352,6 +372,8 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             } else {
                 None
             },
+            is_extern: ast_union.is_extern,
+            c_name: ast_union.c_name.map(|name| self.arena.names().get(name)),
         };
         let hir = HirUnion {
             span: ast_union.span,
@@ -368,7 +390,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
     fn visit_enum(&mut self, ast_enum: &'ast AstEnum<'ast>) -> HirResult<HirEnum<'hir>> {
         let qualified = self.qualified_name(ast_enum.name.name);
         let name = self.arena.names().get(&qualified);
-        
+
         if name.len() == 1 {
             return Err(Self::name_single_character_error(&ast_enum.name.span));
         }
@@ -472,7 +494,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
     fn visit_struct(&mut self, node: &'ast AstStruct<'ast>) -> HirResult<HirStruct<'hir>> {
         let qualified = self.qualified_name(node.name.name);
         let name = self.arena.names().get(&qualified);
-        
+
         if name.len() == 1 {
             return Err(Self::name_single_character_error(&node.name.span));
         }
@@ -1026,7 +1048,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
             }
             AstStatement::Const(ast_const) => {
                 let name = self.arena.names().get(ast_const.name.name);
-                
+
                 if name.starts_with("__tmp") {
                     let path = ast_const.span.path;
                     let src = crate::atlas_c::utils::get_file_content(path).unwrap();
@@ -1062,7 +1084,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                         span: ast_let.name.span,
                     }));
                 }
-                
+
                 let ty = ast_let.ty.map(|ty| self.visit_ty(ty)).transpose()?;
 
                 let value = self.visit_expr(ast_let.value)?;

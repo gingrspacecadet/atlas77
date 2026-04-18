@@ -121,6 +121,7 @@ pub struct LirExternFunction {
 /// e.g., union Value { a: int32, b: float32 }
 pub struct LirUnion {
     pub name: String,
+    pub c_name: Option<String>,
     pub variants: BTreeMap<String, LirTy>,
 }
 

@@ -109,6 +109,9 @@ pub struct HirUnionSignature<'hir> {
     pub pre_mangled_ty: Option<&'hir HirGenericTy<'hir>>,
     pub docstring: Option<&'hir str>,
     pub is_instantiated: bool,
+    pub is_extern: bool,
+    /// Optional C type name override for extern unions.
+    pub c_name: Option<&'hir str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy, Default)]

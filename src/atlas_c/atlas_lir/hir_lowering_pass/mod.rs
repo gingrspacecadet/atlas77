@@ -197,6 +197,7 @@ impl<'hir> HirLoweringPass<'hir> {
 
         let lir_union = LirUnion {
             name: union_body.name.to_string(),
+            c_name: union_body.signature.c_name.map(|s| s.to_string()),
             variants,
         };
 
@@ -1602,8 +1603,13 @@ impl<'hir> HirLoweringPass<'hir> {
                 size: arr.size,
             },
             HirTy::Named(n) => {
-                if self.hir_module.signature.unions.contains_key(n.name) {
-                    LirTy::UnionType(n.name.to_string())
+                if let Some(sig) = self.hir_module.signature.unions.get(n.name) {
+                    if sig.is_extern {
+                        let name = sig.c_name.unwrap_or(n.name);
+                        LirTy::UnionType(name.to_string())
+                    } else {
+                        LirTy::UnionType(n.name.to_string())
+                    }
                 } else {
                     let name = self
                         .hir_module

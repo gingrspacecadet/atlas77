@@ -20,6 +20,8 @@ pub enum AstItem<'ast> {
     Struct(AstStruct<'ast>),
     ExternFunction(AstExternFunction<'ast>),
     ExternStruct(AstStruct<'ast>),
+    ExternUnion(AstUnion<'ast>),
+    ExternConstant(AstGlobalConst<'ast>),
     Function(AstFunction<'ast>),
     Enum(AstEnum<'ast>),
     Union(AstUnion<'ast>),
@@ -37,7 +39,9 @@ impl AstItem<'_> {
             AstItem::Function(v) => v.vis = vis,
             AstItem::Enum(v) => v.vis = vis,
             AstItem::Union(v) => v.vis = vis,
+            AstItem::ExternUnion(v) => v.vis = vis,
             AstItem::Constant(v) => v.vis = vis,
+            AstItem::ExternConstant(v) => v.vis = vis,
         }
     }
     pub fn set_flag(&mut self, flag: AstFlag) {
@@ -59,7 +63,9 @@ impl AstItem<'_> {
             AstItem::Function(v) => v.span,
             AstItem::Enum(v) => v.span,
             AstItem::Union(v) => v.span,
+            AstItem::ExternUnion(v) => v.span,
             AstItem::Constant(v) => v.span,
+            AstItem::ExternConstant(v) => v.span,
         }
     }
 }
@@ -77,6 +83,7 @@ impl<'ast> AstItem<'ast> {
         match self {
             AstItem::ExternFunction(v) => v.c_name = Some(c_name),
             AstItem::ExternStruct(v) => v.c_name = Some(c_name),
+            AstItem::ExternUnion(u) => u.c_name = Some(c_name),
             _ => {}
         }
     }
@@ -206,6 +213,7 @@ pub struct AstGlobalConst<'ast> {
     pub value: &'ast AstExpr<'ast>,
     pub vis: AstVisibility,
     pub docstring: Option<&'ast str>,
+    pub is_extern: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +225,9 @@ pub struct AstUnion<'ast> {
     pub vis: AstVisibility,
     pub variants: &'ast [&'ast AstObjField<'ast>],
     pub docstring: Option<&'ast str>,
+    pub is_extern: bool,
+    /// Optional C symbol/type name override, used for extern structs.
+    pub c_name: Option<&'ast str>,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +238,7 @@ pub struct AstEnum<'ast> {
     pub vis: AstVisibility,
     pub variants: &'ast [&'ast AstEnumVariant<'ast>],
     pub docstring: Option<&'ast str>,
+    pub is_extern: bool,
 }
 #[derive(Debug, Clone)]
 pub struct AstEnumVariant<'ast> {

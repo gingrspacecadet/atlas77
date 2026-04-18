@@ -265,8 +265,13 @@ impl<'ast> Parser<'ast> {
                         Ok(AstItem::ExternFunction(func))
                     }
                     TokenKind::KwStruct => Ok(AstItem::ExternStruct(self.parse_extern_struct()?)),
+                    TokenKind::KwUnion => Ok(AstItem::ExternUnion(self.parse_extern_union()?)),
                     _ => Err(self.unexpected_token_error(
-                        TokenVec(vec![TokenKind::KwFunc, TokenKind::KwStruct]),
+                        TokenVec(vec![
+                            TokenKind::KwFunc,
+                            TokenKind::KwStruct,
+                            TokenKind::KwUnion,
+                        ]),
                         &self.current().span(),
                     )),
                 }
@@ -285,6 +290,7 @@ impl<'ast> Parser<'ast> {
                     value: c.value,
                     vis: AstVisibility::default(),
                     docstring: None,
+                    is_extern: false,
                 });
                 Ok(c)
             }
@@ -591,6 +597,7 @@ impl<'ast> Parser<'ast> {
             variants: self.arena.alloc_vec(variants),
             vis: AstVisibility::default(),
             docstring: None,
+            is_extern: false,
         };
         Ok(node)
     }
@@ -671,6 +678,8 @@ impl<'ast> Parser<'ast> {
             variants: self.arena.alloc_vec(variants),
             vis: AstVisibility::default(),
             docstring: None,
+            is_extern: false,
+            c_name: None,
         };
         Ok(node)
     }
@@ -2004,6 +2013,12 @@ impl<'ast> Parser<'ast> {
 
     fn parse_extern_struct(&mut self) -> ParseResult<AstStruct<'ast>> {
         let mut node = self.parse_struct()?;
+        node.is_extern = true;
+        Ok(node)
+    }
+
+    fn parse_extern_union(&mut self) -> ParseResult<AstUnion<'ast>> {
+        let mut node = self.parse_union()?;
         node.is_extern = true;
         Ok(node)
     }

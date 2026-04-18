@@ -11,9 +11,9 @@ namespace std {
         length: uint64;
         capacity: uint64;
 
-        fun new(ptr_: *T, len: uint64) -> std::vector<T> {
+        fun new(ptr: *T, len: uint64) -> std::vector<T> {
             let data = std::malloc<T>(sizeof<T>() * len);
-            std::memcpy(data, ptr_, sizeof<T>() * len);
+            std::memcpy(data, ptr, sizeof<T>() * len);
             return std::vector<T> {
                 .data = data,
                 .length = len,
