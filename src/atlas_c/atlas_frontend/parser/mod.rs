@@ -52,6 +52,12 @@ pub struct Parser<'ast> {
     pos: usize,
 }
 
+enum ParsedItemAttribute<'ast> {
+    Flag(AstFlag),
+    CName(&'ast str),
+    Nullable(Span),
+}
+
 pub fn remove_comments(tokens: Vec<Token>) -> Vec<Token> {
     tokens
         .into_iter()
@@ -307,21 +313,18 @@ impl<'ast> Parser<'ast> {
                 Ok(item)
             }
             TokenKind::Hash => {
-                if self.peek() == Some(TokenKind::LBracket)
-                    && self.peek_at(2) == Some(TokenKind::Identifier("c_name".to_string()))
-                {
-                    let c_name = self.parse_c_name_attribute()?;
-                    let mut item = self.parse_item()?;
-                    item.set_c_name(c_name);
-                    Ok(item)
-                } else if self.peek() == Some(TokenKind::LBracket)
-                    && self.peek_at(2) == Some(TokenKind::Identifier("std".to_string()))
-                    && self.peek_at(3) == Some(TokenKind::DoubleColon)
-                    && self.peek_at(4) == Some(TokenKind::Identifier("nullable".to_string()))
-                {
-                    let nullable_span = self.parse_nullable_type_attribute()?;
-                    let mut item = self.parse_item()?;
-                    match item {
+                let attribute = self.parse_item_attribute()?;
+                let mut item = self.parse_item()?;
+                match attribute {
+                    ParsedItemAttribute::Flag(flag) => {
+                        item.set_flag(flag);
+                        Ok(item)
+                    }
+                    ParsedItemAttribute::CName(c_name) => {
+                        item.set_c_name(c_name);
+                        Ok(item)
+                    }
+                    ParsedItemAttribute::Nullable(nullable_span) => match item {
                         AstItem::Struct(_) | AstItem::ExternStruct(_) => {
                             item.set_nullable_marker(nullable_span);
                             Ok(item)
@@ -330,12 +333,7 @@ impl<'ast> Parser<'ast> {
                             TokenVec(vec![TokenKind::KwStruct]),
                             &item.span(),
                         )),
-                    }
-                } else {
-                    let flag = self.parse_flag()?;
-                    let mut item = self.parse_item()?;
-                    item.set_flag(flag);
-                    Ok(item)
+                    },
                 }
             }
             TokenKind::Docs(doc) => {
@@ -383,38 +381,80 @@ impl<'ast> Parser<'ast> {
         })
     }
 
-    // TODO: Be a bit more flexible with flag names. e.g. `debug`, `display` or whatever without "std" could be allowed
-    fn parse_flag(&mut self) -> ParseResult<AstFlag> {
-        self.expect(TokenKind::Hash)?;
-        self.expect(TokenKind::LBracket)?;
-        let start_span = self.expect(TokenKind::Identifier("std".to_string()))?.span;
-        self.expect(TokenKind::DoubleColon)?;
-        let flag_token = match self.current().kind() {
-            TokenKind::Identifier(ref s) if s == "copyable" => {
+    fn parse_attribute_path(&mut self) -> ParseResult<(String, Span)> {
+        let first_segment = match self.current().kind() {
+            TokenKind::Identifier(s) => {
                 let span = self.advance().span;
-                AstFlag::Copyable(Span::union_span(&start_span, &span))
-            }
-            TokenKind::Identifier(ref s) if s == "default" => {
-                let span = self.advance().span;
-                AstFlag::Default(Span::union_span(&start_span, &span))
-            }
-            TokenKind::Identifier(ref s) if s == "hashable" => {
-                let span = self.advance().span;
-                AstFlag::Hashable(Span::union_span(&start_span, &span))
-            }
-            TokenKind::Identifier(ref s) if s == "non_copyable" => {
-                let span = self.advance().span;
-                AstFlag::NonCopyable(Span::union_span(&start_span, &span))
-            }
-            TokenKind::Identifier(ref s) if s == "intrinsic" => {
-                let span = self.advance().span;
-                AstFlag::Intrinsic(Span::union_span(&start_span, &span))
-            }
-            TokenKind::Identifier(ref s) if s == "trivially_copyable" => {
-                let span = self.advance().span;
-                AstFlag::TriviallyCopyable(Span::union_span(&start_span, &span))
+                (s, span)
             }
             _ => {
+                return Err(self.unexpected_token_error(
+                    TokenVec(vec![TokenKind::Identifier("attribute".to_string())]),
+                    &self.current().span(),
+                ));
+            }
+        };
+
+        let mut path_parts = vec![first_segment.0];
+        let mut end_span = first_segment.1;
+
+        while self.current().kind() == TokenKind::DoubleColon {
+            let _ = self.advance();
+            match self.current().kind() {
+                TokenKind::Identifier(s) => {
+                    end_span = self.advance().span;
+                    path_parts.push(s);
+                }
+                _ => {
+                    return Err(self.unexpected_token_error(
+                        TokenVec(vec![TokenKind::Identifier("attribute segment".to_string())]),
+                        &self.current().span(),
+                    ));
+                }
+            }
+        }
+
+        Ok((
+            path_parts.join("::"),
+            Span::union_span(&first_segment.1, &end_span),
+        ))
+    }
+
+    fn parse_item_attribute(&mut self) -> ParseResult<ParsedItemAttribute<'ast>> {
+        self.expect(TokenKind::Hash)?;
+        self.expect(TokenKind::LBracket)?;
+
+        let (attribute_path, attribute_span) = self.parse_attribute_path()?;
+
+        let parsed_attribute = match attribute_path.as_str() {
+            "c_name" => {
+                self.expect(TokenKind::LParen)?;
+                let c_name = match self.current().kind() {
+                    TokenKind::StringLiteral(s) => {
+                        let value = self.arena.alloc(s);
+                        let _ = self.advance();
+                        value
+                    }
+                    _ => {
+                        return Err(self.unexpected_token_error(
+                            TokenVec(vec![TokenKind::StringLiteral("name_in_c".to_string())]),
+                            &self.current().span(),
+                        ));
+                    }
+                };
+                self.expect(TokenKind::RParen)?;
+                ParsedItemAttribute::CName(c_name)
+            }
+            "std::nullable" => ParsedItemAttribute::Nullable(attribute_span),
+            "std::copyable" => ParsedItemAttribute::Flag(AstFlag::Copyable(attribute_span)),
+            "std::default" => ParsedItemAttribute::Flag(AstFlag::Default(attribute_span)),
+            "std::hashable" => ParsedItemAttribute::Flag(AstFlag::Hashable(attribute_span)),
+            "std::non_copyable" => ParsedItemAttribute::Flag(AstFlag::NonCopyable(attribute_span)),
+            "std::trivially_copyable" => {
+                ParsedItemAttribute::Flag(AstFlag::TriviallyCopyable(attribute_span))
+            }
+            "core::intrinsic" => ParsedItemAttribute::Flag(AstFlag::Intrinsic(attribute_span)),
+            _ if attribute_path.starts_with("std::") || attribute_path.starts_with("core::") => {
                 return Err(Box::new(SyntaxError::FlagDoesntExist(
                     FlagDoesntExistError {
                         span: self.current().span,
@@ -423,16 +463,23 @@ impl<'ast> Parser<'ast> {
                             get_file_content(self.current().span.path)
                                 .expect("Failed to get source content for error reporting"),
                         ),
-                        flag_name: match &self.current().kind() {
-                            TokenKind::Identifier(s) => s.clone(),
-                            _ => format!("{:?}", self.current().kind()),
-                        },
+                        flag_name: attribute_path,
                     },
                 )));
             }
+            _ => {
+                return Err(self.unexpected_token_error(
+                    TokenVec(vec![TokenKind::Identifier(
+                        "c_name|std::nullable|std::copyable|std::default|std::hashable|std::non_copyable|std::trivially_copyable|core::intrinsic"
+                            .to_string(),
+                    )]),
+                    &self.current().span(),
+                ));
+            }
         };
+
         self.expect(TokenKind::RBracket)?;
-        Ok(flag_token)
+        Ok(parsed_attribute)
     }
 
     fn parse_method_attribute(&mut self) -> ParseResult<AstMethodAttribute> {
@@ -491,60 +538,6 @@ impl<'ast> Parser<'ast> {
 
         self.expect(TokenKind::RBracket)?;
         Ok(attribute)
-    }
-
-    fn parse_nullable_type_attribute(&mut self) -> ParseResult<Span> {
-        self.expect(TokenKind::Hash)?;
-        self.expect(TokenKind::LBracket)?;
-        let start_span = self.expect(TokenKind::Identifier("std".to_string()))?.span;
-        self.expect(TokenKind::DoubleColon)?;
-
-        match self.current().kind() {
-            TokenKind::Identifier(ref s) if s == "nullable" => {
-                let end_span = self.advance().span;
-                self.expect(TokenKind::RBracket)?;
-                Ok(Span::union_span(&start_span, &end_span))
-            }
-            _ => Err(self.unexpected_token_error(
-                TokenVec(vec![TokenKind::Identifier("std::nullable".to_string())]),
-                &self.current().span(),
-            )),
-        }
-    }
-
-    fn parse_c_name_attribute(&mut self) -> ParseResult<&'ast str> {
-        self.expect(TokenKind::Hash)?;
-        self.expect(TokenKind::LBracket)?;
-
-        match self.current().kind() {
-            TokenKind::Identifier(ref s) if s == "c_name" => {
-                let _ = self.advance();
-            }
-            _ => {
-                return Err(self.unexpected_token_error(
-                    TokenVec(vec![TokenKind::Identifier("c_name".to_string())]),
-                    &self.current().span(),
-                ));
-            }
-        }
-
-        self.expect(TokenKind::LParen)?;
-        let c_name = match self.current().kind() {
-            TokenKind::StringLiteral(s) => {
-                let s = self.arena.alloc(s);
-                let _ = self.advance();
-                s
-            }
-            _ => {
-                return Err(self.unexpected_token_error(
-                    TokenVec(vec![TokenKind::StringLiteral("name_in_c".to_string())]),
-                    &self.current().span(),
-                ));
-            }
-        };
-        self.expect(TokenKind::RParen)?;
-        self.expect(TokenKind::RBracket)?;
-        Ok(c_name)
     }
 
     fn parse_enum(&mut self) -> ParseResult<AstEnum<'ast>> {

@@ -18,7 +18,7 @@ namespace std {
     #[c_name("memcpy")]
     public extern fun memcpy<T>(dest: *T, src: *const T, size: uint64) -> *T;
 
-    #[std::intrinsic]
+    #[core::intrinsic]
     //! Moves a value, invalidating the source. 
     //! [!Note] This is a low-level primitive and should be used with care.
     public extern fun move<T>(from: T) -> T;
@@ -45,9 +45,9 @@ namespace std {
     }
 
     namespace ptr {
-        #[std::intrinsic]
+        #[core::intrinsic]
         public extern fun read<T>(ptr: *T) -> T;
-        #[std::intrinsic]
+        #[core::intrinsic]
         public extern fun write<T>(ptr: *T, val: T);
 
         public fun swap<T>(a: *T, b: *T) {
@@ -61,9 +61,9 @@ namespace std {
     public struct empty {}
 }
 
-#[std::intrinsic]
+#[core::intrinsic]
 public extern fun size_of<T>() -> uint64;
-#[std::intrinsic]
+#[core::intrinsic]
 public extern fun align_of<T>() -> uint64;
 //! For the people who can't add a little underscore...
 public fun sizeof<T>() -> uint64
