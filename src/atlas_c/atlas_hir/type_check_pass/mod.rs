@@ -2840,29 +2840,32 @@ impl<'hir> TypeChecker<'hir> {
         if let Some(name) =
             Self::get_generic_name(self.arena.intern(monomorphized.return_ty.clone()))
         {
-            let actual_generic_ty = match generics.iter().find(|(n, _)| *n == name) {
-                Some((_, ty)) => *ty,
-                None => {
-                    return Err(Self::type_mismatch_err(
-                        &format!(
-                            "generic parameter `{}` should be inferred from function arguments",
-                            name
-                        ),
-                        &signature.span,
-                        &format!(
-                            "inferred type for `{}` from the return type `{}`",
-                            name, monomorphized.return_ty
-                        ),
-                        &call_expr_span,
-                    ));
-                }
-            };
-            let return_ty = self.get_generic_ret_ty(
-                self.arena.intern(monomorphized.return_ty.clone()),
-                actual_generic_ty,
-            );
+            let is_declared_generic = signature.generics.iter().any(|g| g.generic_name == name);
+            if is_declared_generic {
+                let actual_generic_ty = match generics.iter().find(|(n, _)| *n == name) {
+                    Some((_, ty)) => *ty,
+                    None => {
+                        return Err(Self::type_mismatch_err(
+                            &format!(
+                                "generic parameter `{}` should be inferred from function arguments",
+                                name
+                            ),
+                            &signature.span,
+                            &format!(
+                                "inferred type for `{}` from the return type `{}`",
+                                name, monomorphized.return_ty
+                            ),
+                            &call_expr_span,
+                        ));
+                    }
+                };
+                let return_ty = self.get_generic_ret_ty(
+                    self.arena.intern(monomorphized.return_ty.clone()),
+                    actual_generic_ty,
+                );
 
-            monomorphized.return_ty = return_ty.clone();
+                monomorphized.return_ty = return_ty.clone();
+            }
         };
 
         monomorphized.generics = vec![];

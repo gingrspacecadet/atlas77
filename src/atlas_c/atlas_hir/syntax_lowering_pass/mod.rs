@@ -1445,6 +1445,48 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 match &callee {
                     HirExpr::Ident(ident) => {
                         match ident.name {
+                            "type_of" => {
+                                if c.generics.len() != 1 {
+                                    let path = node.span().path;
+                                    let src =
+                                        crate::atlas_c::utils::get_file_content(path).unwrap();
+                                    return Err(HirError::IncorrectIntrinsicCallArguments(
+                                        IncorrectIntrinsicCallArgumentsError {
+                                            span: node.span(),
+                                            name: "type_of".to_string(),
+                                            expected: 1,
+                                            found: c.generics.len(),
+                                            src: NamedSource::new(path, src),
+                                        },
+                                    ));
+                                }
+                                let type_info_span = self
+                                    .ast
+                                    .items
+                                    .iter()
+                                    .find_map(|item| {
+                                        if let AstItem::Struct(s) = item
+                                            && s.name.name == "core::type_info"
+                                        {
+                                            return Some(s.name_span);
+                                        }
+                                        None
+                                    })
+                                    .unwrap_or(node.span());
+                                let ty = self
+                                    .arena
+                                    .types()
+                                    .get_named_ty("core::type_info", type_info_span);
+                                let target_ty = self.visit_ty(c.generics[0])?;
+                                let hir = HirExpr::IntrinsicCall(HirIntrinsicCallExpr {
+                                    name: "type_of",
+                                    args: vec![],
+                                    args_ty: vec![target_ty],
+                                    span: node.span(),
+                                    ty,
+                                });
+                                return Ok(hir);
+                            }
                             "size_of" => {
                                 if c.generics.len() != 1 {
                                     let path = node.span().path;
@@ -1460,7 +1502,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                         },
                                     ));
                                 }
-                                let ty = self.visit_ty(c.generics[0])?;
+                                let ty = self.arena.types().get_uint_ty(64);
                                 let hir = HirExpr::IntrinsicCall(HirIntrinsicCallExpr {
                                     name: "size_of",
                                     args: vec![],

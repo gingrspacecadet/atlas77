@@ -1327,6 +1327,10 @@ impl<'hir> HirLoweringPass<'hir> {
             }
 
             HirExpr::IntrinsicCall(intrinsic) => match intrinsic.name {
+                "type_of" => {
+                    let target_ty = intrinsic.args_ty.first().copied().unwrap_or(intrinsic.ty);
+                    self.construct_type_info_object(target_ty, intrinsic.span)
+                }
                 "size_of" => {
                     let target_ty = intrinsic.args_ty.first().copied().unwrap_or(intrinsic.ty);
                     let lir_target_ty = self.hir_ty_to_lir_ty(target_ty, intrinsic.span);
@@ -1740,6 +1744,259 @@ impl<'hir> HirLoweringPass<'hir> {
         } else {
             value.div_ceil(align) * align
         }
+    }
+    /// The goal of this function is to construct the core::type_info object for a given type.
+    /// The core::type_info object declaration is contained into "core/reflection.atlas", and is of this form:
+    /// ```atlas
+    /// namespace core {
+    ///     #[std::trivially_copyable]
+    ///     public struct type_info {
+    ///       public:
+    ///         name: *const uint8;
+    ///         mangled_name: *const uint8;
+    ///         size: uint64;
+    ///         align: uint64;
+    ///         method_names: [*const uint8];
+    ///         method_count: uint64;
+    ///         field_names: [*const uint8];
+    ///         field_count: uint64;
+    ///     }
+    /// }
+    ///
+    /// ```
+    fn construct_type_info_object(&mut self, ty: &HirTy, span: Span) -> LirResult<LirOperand> {
+        let mut method_count = 0u64;
+        let mut method_names = Vec::new();
+        let mut field_count = 0u64;
+        let mut field_names = Vec::new();
+        let mut is_default = false;
+        let type_name;
+        let mangled_name;
+
+        match ty {
+            HirTy::Named(named) => {
+                if let Some(sig) = self.hir_module.signature.structs.get(named.name) {
+                    method_count = sig.methods.len() as u64;
+                    method_names = sig.methods.keys().copied().collect();
+                    field_count = sig.fields.len() as u64;
+                    field_names = sig.fields.keys().copied().collect();
+                    is_default = sig.is_std_default;
+                    if let Some(c_name) = &sig.c_name {
+                        type_name = c_name.to_string();
+                        mangled_name = c_name.to_string();
+                    } else if let Some(pre_mangled_ty) = sig.pre_mangled_ty {
+                        type_name = pre_mangled_ty.name.to_string();
+                        mangled_name = MonomorphizationPass::generate_mangled_name(
+                            self.hir_arena,
+                            pre_mangled_ty,
+                            "struct",
+                        )
+                        .to_string()
+                    } else {
+                        type_name = named.name.to_string();
+                        mangled_name = named.name.to_string();
+                    }
+                } else if let Some(sig) = self.hir_module.signature.unions.get(named.name) {
+                    field_count = sig.variants.len() as u64;
+                    field_names = sig.variants.keys().copied().collect();
+                    if let Some(c_name) = &sig.c_name {
+                        type_name = c_name.to_string();
+                        mangled_name = c_name.to_string();
+                    } else if let Some(pre_mangled_ty) = sig.pre_mangled_ty {
+                        type_name = pre_mangled_ty.name.to_string();
+                        mangled_name = MonomorphizationPass::generate_mangled_name(
+                            self.hir_arena,
+                            pre_mangled_ty,
+                            "union",
+                        )
+                        .to_string();
+                    } else {
+                        type_name = named.name.to_string();
+                        mangled_name = named.name.to_string();
+                    }
+                } else {
+                    type_name = named.name.to_string();
+                    mangled_name = named.name.to_string();
+                }
+            }
+            HirTy::Generic(generic) => {
+                let struct_name =
+                    MonomorphizationPass::generate_mangled_name(self.hir_arena, generic, "struct");
+                if let Some(sig) = self.hir_module.signature.structs.get(struct_name) {
+                    method_count = sig.methods.len() as u64;
+                    method_names = sig.methods.keys().copied().collect();
+                    field_count = sig.fields.len() as u64;
+                    field_names = sig.fields.keys().copied().collect();
+                    is_default = sig.is_std_default;
+                    if let Some(c_name) = &sig.c_name {
+                        type_name = c_name.to_string();
+                        mangled_name = c_name.to_string();
+                    } else if let Some(pre_mangled_ty) = sig.pre_mangled_ty {
+                        type_name = pre_mangled_ty.name.to_string();
+                        mangled_name = MonomorphizationPass::generate_mangled_name(
+                            self.hir_arena,
+                            pre_mangled_ty,
+                            "struct",
+                        )
+                        .to_string();
+                    } else {
+                        type_name = struct_name.to_string();
+                        mangled_name = struct_name.to_string();
+                    }
+                } else {
+                    let union_name = MonomorphizationPass::generate_mangled_name(
+                        self.hir_arena,
+                        generic,
+                        "union",
+                    );
+                    if let Some(sig) = self.hir_module.signature.unions.get(union_name) {
+                        field_count = sig.variants.len() as u64;
+                        field_names = sig.variants.keys().copied().collect();
+                        if let Some(c_name) = &sig.c_name {
+                            type_name = c_name.to_string();
+                            mangled_name = c_name.to_string();
+                        } else if let Some(pre_mangled_ty) = sig.pre_mangled_ty {
+                            type_name = pre_mangled_ty.name.to_string();
+                            mangled_name = MonomorphizationPass::generate_mangled_name(
+                                self.hir_arena,
+                                pre_mangled_ty,
+                                "union",
+                            )
+                            .to_string();
+                        } else {
+                            type_name = union_name.to_string();
+                            mangled_name = union_name.to_string();
+                        }
+                    } else {
+                        type_name = MonomorphizationPass::generate_mangled_name(
+                            self.hir_arena,
+                            generic,
+                            "struct",
+                        )
+                        .to_string();
+                        mangled_name = type_name.to_string();
+                    }
+                }
+            }
+            _ => {
+                type_name = format!("{}", ty);
+                mangled_name = type_name.to_string();
+            }
+        }
+
+        let is_trivially_copyable = ty.is_trivially_copyable(&self.hir_module.signature);
+        let is_copyable = ty.is_copyable(&self.hir_module.signature);
+
+        let lir_target_ty = self.hir_ty_to_lir_ty(ty, span);
+        let (size, align) = self.lir_type_size_and_align(&lir_target_ty);
+
+        let mut field_values = BTreeMap::new();
+        field_values.insert(
+            "name".to_string(),
+            LirOperand::Const(ConstantValue::String(type_name)),
+        );
+        field_values.insert(
+            "mangled_name".to_string(),
+            LirOperand::Const(ConstantValue::String(mangled_name)),
+        );
+        field_values.insert("size".to_string(), LirOperand::ImmUInt(size as u64));
+        field_values.insert("align".to_string(), LirOperand::ImmUInt(align as u64));
+        let method_names_array = if method_names.is_empty() {
+            LirOperand::ImmUnit
+        } else {
+            let array_dst = self.new_temp();
+            self.emit(LirInstr::LoadConst {
+                dst: array_dst.clone(),
+                value: LirOperand::ImmUnit, // Placeholder for the actual array data
+            })?;
+            let dst = self.new_temp();
+            self.emit(LirInstr::ConstructArray {
+                ty: LirTy::ArrayTy {
+                    inner: Box::new(LirTy::Ptr {
+                        is_const: true,
+                        inner: Box::new(LirTy::UInt8),
+                    }),
+                    size: method_names.len(),
+                },
+                dst: dst.clone(),
+                size,
+            })?;
+            for (idx, item) in method_names.iter().enumerate() {
+                let src = LirOperand::Const(ConstantValue::String(item.to_string()));
+                let index_operand = LirOperand::Index {
+                    src: Box::new(dst.clone()),
+                    index: Box::new(LirOperand::ImmUInt(idx as u64)),
+                };
+                self.emit(LirInstr::Assign {
+                    ty: LirTy::Ptr {
+                        is_const: true,
+                        inner: Box::new(LirTy::UInt8),
+                    },
+                    dst: index_operand,
+                    src,
+                })?;
+            }
+            dst
+        };
+        field_values.insert("method_names".to_string(), method_names_array);
+        field_values.insert(
+            "method_count".to_string(),
+            LirOperand::ImmUInt(method_count),
+        );
+        let field_names_array = if field_names.is_empty() {
+            LirOperand::ImmUnit
+        } else {
+            let array_dst = self.new_temp();
+            self.emit(LirInstr::LoadConst {
+                dst: array_dst.clone(),
+                value: LirOperand::ImmUnit, // Placeholder for the actual array data
+            })?;
+            let dst = self.new_temp();
+            self.emit(LirInstr::ConstructArray {
+                ty: LirTy::ArrayTy {
+                    inner: Box::new(LirTy::Ptr {
+                        is_const: true,
+                        inner: Box::new(LirTy::UInt8),
+                    }),
+                    size: field_names.len(),
+                },
+                dst: dst.clone(),
+                size,
+            })?;
+            for (idx, item) in field_names.iter().enumerate() {
+                let src = LirOperand::Const(ConstantValue::String(item.to_string()));
+                let index_operand = LirOperand::Index {
+                    src: Box::new(dst.clone()),
+                    index: Box::new(LirOperand::ImmUInt(idx as u64)),
+                };
+                self.emit(LirInstr::Assign {
+                    ty: LirTy::Ptr {
+                        is_const: true,
+                        inner: Box::new(LirTy::UInt8),
+                    },
+                    dst: index_operand,
+                    src,
+                })?;
+            }
+            dst
+        };
+        field_values.insert("field_names".to_string(), field_names_array);
+        field_values.insert("field_count".to_string(), LirOperand::ImmUInt(field_count));
+        field_values.insert(
+            "is_trivially_copyable".to_string(),
+            LirOperand::ImmBool(is_trivially_copyable),
+        );
+        field_values.insert("is_copyable".to_string(), LirOperand::ImmBool(is_copyable));
+        field_values.insert("is_default".to_string(), LirOperand::ImmBool(is_default));
+
+        let dst = self.new_temp();
+        self.emit(LirInstr::ConstructObject {
+            ty: LirTy::StructType("core::type_info".to_string()),
+            dst: dst.clone(),
+            field_values,
+        })?;
+
+        Ok(dst)
     }
 }
 
