@@ -5,7 +5,7 @@ use std::fmt::Formatter;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-pub struct HirTyId(u64);
+pub struct HirTyId(pub u64);
 
 const INTEGER_TY_ID: u8 = 0x01;
 const FLOAT_TY_ID: u8 = 0x03;
