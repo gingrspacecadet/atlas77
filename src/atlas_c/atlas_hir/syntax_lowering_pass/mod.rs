@@ -46,6 +46,7 @@ use crate::atlas_c::{
             HirTypeParameterItemSignature, HirUnionSignature, HirVisibility,
         },
         special_methods::{
+            INTRINSIC_ALIGNOF, INTRINSIC_SIZEOF, INTRINSIC_TYPE_ID, INTRINSIC_TYPE_OF,
             SpecialMethodKind, expected_signature_for_struct, special_method_by_name,
             special_method_enabled_by_flag,
         },
@@ -1445,7 +1446,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                 match &callee {
                     HirExpr::Ident(ident) => {
                         match ident.name {
-                            "type_of" => {
+                            INTRINSIC_TYPE_ID => {
                                 if c.generics.len() != 1 {
                                     let path = node.span().path;
                                     let src =
@@ -1453,7 +1454,32 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                     return Err(HirError::IncorrectIntrinsicCallArguments(
                                         IncorrectIntrinsicCallArgumentsError {
                                             span: node.span(),
-                                            name: "type_of".to_string(),
+                                            name: INTRINSIC_TYPE_ID.to_string(),
+                                            expected: 1,
+                                            found: c.generics.len(),
+                                            src: NamedSource::new(path, src),
+                                        },
+                                    ));
+                                }
+                                let ty = self.arena.types().get_uint_ty(64);
+                                let hir = HirExpr::IntrinsicCall(HirIntrinsicCallExpr {
+                                    name: INTRINSIC_TYPE_ID,
+                                    args: vec![],
+                                    args_ty: vec![self.visit_ty(c.generics[0])?],
+                                    span: node.span(),
+                                    ty,
+                                });
+                                return Ok(hir);
+                            }
+                            INTRINSIC_TYPE_OF => {
+                                if c.generics.len() != 1 {
+                                    let path = node.span().path;
+                                    let src =
+                                        crate::atlas_c::utils::get_file_content(path).unwrap();
+                                    return Err(HirError::IncorrectIntrinsicCallArguments(
+                                        IncorrectIntrinsicCallArgumentsError {
+                                            span: node.span(),
+                                            name: INTRINSIC_TYPE_OF.to_string(),
                                             expected: 1,
                                             found: c.generics.len(),
                                             src: NamedSource::new(path, src),
@@ -1479,7 +1505,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                     .get_named_ty("core::type_info", type_info_span);
                                 let target_ty = self.visit_ty(c.generics[0])?;
                                 let hir = HirExpr::IntrinsicCall(HirIntrinsicCallExpr {
-                                    name: "type_of",
+                                    name: INTRINSIC_TYPE_OF,
                                     args: vec![],
                                     args_ty: vec![target_ty],
                                     span: node.span(),
@@ -1487,7 +1513,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                 });
                                 return Ok(hir);
                             }
-                            "size_of" => {
+                            INTRINSIC_SIZEOF => {
                                 if c.generics.len() != 1 {
                                     let path = node.span().path;
                                     let src =
@@ -1495,7 +1521,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                     return Err(HirError::IncorrectIntrinsicCallArguments(
                                         IncorrectIntrinsicCallArgumentsError {
                                             span: node.span(),
-                                            name: "size_of".to_string(),
+                                            name: INTRINSIC_SIZEOF.to_string(),
                                             expected: 1,
                                             found: c.generics.len(),
                                             src: NamedSource::new(path, src),
@@ -1504,7 +1530,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                 }
                                 let ty = self.arena.types().get_uint_ty(64);
                                 let hir = HirExpr::IntrinsicCall(HirIntrinsicCallExpr {
-                                    name: "size_of",
+                                    name: INTRINSIC_SIZEOF,
                                     args: vec![],
                                     args_ty: vec![ty],
                                     span: node.span(),
@@ -1512,7 +1538,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                 });
                                 return Ok(hir);
                             }
-                            "align_of" => {
+                            INTRINSIC_ALIGNOF => {
                                 if c.generics.len() != 1 {
                                     let path = node.span().path;
                                     let src =
@@ -1520,7 +1546,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                     return Err(HirError::IncorrectIntrinsicCallArguments(
                                         IncorrectIntrinsicCallArgumentsError {
                                             span: node.span(),
-                                            name: "align_of".to_string(),
+                                            name: INTRINSIC_ALIGNOF.to_string(),
                                             expected: 1,
                                             found: c.generics.len(),
                                             src: NamedSource::new(path, src),
@@ -1529,7 +1555,7 @@ impl<'ast, 'hir> AstSyntaxLoweringPass<'ast, 'hir> {
                                 }
                                 let ty = self.visit_ty(c.generics[0])?;
                                 let hir = HirExpr::IntrinsicCall(HirIntrinsicCallExpr {
-                                    name: "align_of",
+                                    name: INTRINSIC_ALIGNOF,
                                     args: vec![],
                                     args_ty: vec![ty],
                                     span: node.span(),

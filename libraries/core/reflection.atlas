@@ -1,10 +1,14 @@
 #[core::intrinsic]
 public extern fun type_of<T>() -> core::type_info;
 
+#[core::intrinsic]
+public extern fun type_id<T>() -> uint64;
+
 namespace core {
     #[std::trivially_copyable]
     public struct type_info {
       public:
+        id: uint64;
         name: str;
         mangled_name: str;
         size: uint64;

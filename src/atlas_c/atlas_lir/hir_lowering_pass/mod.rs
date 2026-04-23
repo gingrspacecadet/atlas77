@@ -14,12 +14,13 @@ use crate::atlas_c::{
             INTRINSIC_PRIMITIVE_COPY, INTRINSIC_PRIMITIVE_DEFAULT, INTRINSIC_PRIMITIVE_HASH,
         },
         stmt::HirStatement,
-        ty::{HirGenericTy, HirTy},
+        ty::{HirGenericTy, HirTy, HirTyId},
     },
     atlas_lir::{
         error::{
-            CurrentFunctionDoesntExistError, LirLoweringError, LirResult, NoReturnInFunctionError,
-            UnknownTypeError, UnsupportedHirExprError,
+            CurrentFunctionDoesntExistError, IntrinsicCallShouldHaveBeenHandledEarlierError,
+            LirLoweringError, LirResult, NoReturnInFunctionError, UnknownTypeError,
+            UnsupportedHirExprError,
         },
         program::{
             LirBlock, LirExternFunction, LirFunction, LirInstr, LirOperand, LirProgram, LirStruct,
@@ -1370,6 +1371,10 @@ impl<'hir> HirLoweringPass<'hir> {
                     let target_ty = intrinsic.args_ty.first().copied().unwrap_or(intrinsic.ty);
                     self.construct_type_info_object(target_ty, intrinsic.span)
                 }
+                "type_id" => {
+                    let target_ty = intrinsic.args_ty.first().copied().unwrap_or(intrinsic.ty);
+                    self.construct_type_id(target_ty)
+                }
                 "size_of" => {
                     let target_ty = intrinsic.args_ty.first().copied().unwrap_or(intrinsic.ty);
                     let lir_target_ty = self.hir_ty_to_lir_ty(target_ty, intrinsic.span);
@@ -1790,6 +1795,21 @@ impl<'hir> HirLoweringPass<'hir> {
             value.div_ceil(align) * align
         }
     }
+
+    fn construct_type_id(&mut self, ty: &HirTy) -> LirResult<LirOperand> {
+        let type_id: HirTyId = ty.into();
+        let dest = self.new_temp();
+        self.emit(LirInstr::LoadImm {
+            ty: LirTy::UInt64,
+            dst: dest.clone(),
+            value: LirOperand::ImmUInt {
+                val: type_id.0,
+                size: 64,
+            },
+        })?;
+        Ok(dest)
+    }
+
     /// The goal of this function is to construct the core::type_info object for a given type.
     /// The core::type_info object declaration is contained into "core/reflection.atlas", and is of this form:
     /// ```atlas
@@ -1797,6 +1817,7 @@ impl<'hir> HirLoweringPass<'hir> {
     ///     #[std::trivially_copyable]
     ///     public struct type_info {
     ///       public:
+    ///         id: uint64;
     ///         name: *const uint8;
     ///         mangled_name: *const uint8;
     ///         size: uint64;
@@ -1936,6 +1957,7 @@ impl<'hir> HirLoweringPass<'hir> {
         let (size, align) = self.lir_type_size_and_align(&lir_target_ty);
 
         let mut field_values = BTreeMap::new();
+        field_values.insert("id".to_string(), self.construct_type_id(ty)?);
         field_values.insert(
             "name".to_string(),
             LirOperand::Const(ConstantValue::String(type_name)),

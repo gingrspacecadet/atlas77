@@ -52,6 +52,10 @@ pub struct PrimitiveSpecialCallDescriptor {
 pub const INTRINSIC_PRIMITIVE_DEFAULT: &str = "__atlas_primitive_default";
 pub const INTRINSIC_PRIMITIVE_COPY: &str = "__atlas_primitive_copy";
 pub const INTRINSIC_PRIMITIVE_HASH: &str = "__atlas_primitive_hash";
+pub const INTRINSIC_SIZEOF: &str = "size_of";
+pub const INTRINSIC_ALIGNOF: &str = "align_of";
+pub const INTRINSIC_TYPE_ID: &str = "type_id";
+pub const INTRINSIC_TYPE_OF: &str = "type_of";
 
 pub static PRIMITIVE_SPECIAL_CALL_REGISTRY: [PrimitiveSpecialCallDescriptor; 3] = [
     PrimitiveSpecialCallDescriptor {
