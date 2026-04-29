@@ -566,6 +566,53 @@ impl<'hir> TypeChecker<'hir> {
         Ok(())
     }
 
+    fn type_exists(&self, ty: &HirTy) -> bool {
+        match ty {
+            HirTy::Named(n) => {
+                self.signature.structs.contains_key(n.name)
+                    || self.signature.enums.contains_key(n.name)
+                    || self.signature.unions.contains_key(n.name)
+            }
+            HirTy::Generic(g) => {
+                (self.signature.structs.contains_key(g.name)
+                    || self.signature.enums.contains_key(g.name)
+                    || self.signature.unions.contains_key(g.name))
+                    && g.inner.iter().all(|arg| self.type_exists(arg))
+            }
+            HirTy::PtrTy(ptr) => self.type_exists(ptr.inner),
+            HirTy::Slice(_)
+            | HirTy::Unit(_)
+            | HirTy::Boolean(_)
+            | HirTy::Integer(_)
+            | HirTy::Float(_)
+            | HirTy::Char(_)
+            | HirTy::String(_)
+            | HirTy::UnsignedInteger(_)
+            | HirTy::LiteralInteger(_)
+            | HirTy::LiteralFloat(_)
+            | HirTy::LiteralUnsignedInteger(_)
+            | HirTy::Uninitialized(_)
+            | HirTy::Function(_) => true,
+            HirTy::InlineArray(arr) => self.type_exists(arr.inner),
+        }
+    }
+
+    fn check_function_params(&mut self, params: &[HirFunctionParameterSignature<'_>]) -> bool {
+        let mut res = true;
+        for arg in params.iter() {
+            if !self.type_exists(arg.ty) {
+                let path = arg.span.path;
+                let src = utils::get_file_content(path).unwrap();
+                self.errors.push(HirError::UnknownType(UnknownTypeError {
+                    span: arg.ty_span,
+                    name: format!("{}", arg.ty),
+                    src: NamedSource::new(path, src),
+                }));
+                res = false;
+            }
+        }
+        res
+    }
     fn check_method(
         &mut self,
         method: &mut HirStructMethod<'hir>,
@@ -578,6 +625,19 @@ impl<'hir> TypeChecker<'hir> {
             self.current_func_name.unwrap().to_string(),
             ContextFunction::new(),
         );
+        self.check_function_params(&method.signature.params);
+        if !self.type_exists(&method.signature.return_ty) {
+            let path = method.span.path;
+            let src = utils::get_file_content(path).unwrap();
+            self.errors.push(HirError::UnknownType(UnknownTypeError {
+                name: format!("{}", method.signature.return_ty),
+                span: method
+                    .signature
+                    .return_ty_span
+                    .unwrap_or(method.signature.span),
+                src: NamedSource::new(path, src),
+            }));
+        }
         for param in &method.signature.params {
             self.context_functions
                 .last_mut()
@@ -740,6 +800,16 @@ impl<'hir> TypeChecker<'hir> {
             self.current_func_name.unwrap().to_string(),
             ContextFunction::new(),
         );
+        self.check_function_params(&func.signature.params);
+        if !self.type_exists(&func.signature.return_ty) {
+            let path = func.span.path;
+            let src = utils::get_file_content(path).unwrap();
+            self.errors.push(HirError::UnknownType(UnknownTypeError {
+                name: format!("{}", func.signature.return_ty),
+                span: func.signature.return_ty_span.unwrap_or(func.signature.span),
+                src: NamedSource::new(path, src),
+            }));
+        }
         for param in &func.signature.params {
             self.context_functions
                 .last_mut()

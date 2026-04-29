@@ -18,9 +18,8 @@ use crate::atlas_c::{
     },
     atlas_lir::{
         error::{
-            CurrentFunctionDoesntExistError, IntrinsicCallShouldHaveBeenHandledEarlierError,
-            LirLoweringError, LirResult, NoReturnInFunctionError, UnknownTypeError,
-            UnsupportedHirExprError,
+            CurrentFunctionDoesntExistError, LirLoweringError, LirResult, NoReturnInFunctionError,
+            UnknownTypeError, UnsupportedHirExprError,
         },
         program::{
             LirBlock, LirExternFunction, LirFunction, LirInstr, LirOperand, LirProgram, LirStruct,
