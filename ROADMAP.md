@@ -11,10 +11,12 @@
 
 **Compiler:**
 - [ ] Type check before monomorphization
+> Will probably never happens, but now monomorphization can be requested by the type checker in certain scenarios
 - [x] Ownership pass rewrite (warn on move, error on delete)
-- [ ] C backend separation
+- [x] C backend separation
 - [x] Intrinsics system
-- [ ] Core C bridge (libc bindings)
+- [x] Core C bridge (libc bindings)
+> Well, it's so vague that I guess, we can consider it done thanks to the build configuration file
 - [ ] Never type (`!`)
 
 **Language:**
@@ -32,7 +34,6 @@
 - [x] ``std::string``
 - [x] ``std::vector<T>``
 - [ ] ``std::array<T, N>``
-- [ ] ``std::ptr<T>``
 
 **Tooling:**
 - [x] Basic build system
