@@ -647,6 +647,7 @@ impl<'hir> HirLoweringPass<'hir> {
             HirExpr::IntegerLiteral(lit) => {
                 let size = match lit.ty {
                     HirTy::Integer(i) => i.size_in_bits,
+                    HirTy::LiteralInteger(i) => i.get_minimal_int_ty().size_in_bits,
                     _ => {
                         return Err(unsupported_expr(lit.span, format!("{:?}", expr)));
                     }
@@ -660,6 +661,7 @@ impl<'hir> HirLoweringPass<'hir> {
             HirExpr::UnsignedIntegerLiteral(lit) => {
                 let size = match lit.ty {
                     HirTy::UnsignedInteger(u) => u.size_in_bits,
+                    HirTy::LiteralUnsignedInteger(u) => u.get_minimal_uint_ty().size_in_bits,
                     _ => {
                         return Err(unsupported_expr(lit.span, format!("{:?}", expr)));
                     }
@@ -675,6 +677,7 @@ impl<'hir> HirLoweringPass<'hir> {
             HirExpr::FloatLiteral(lit) => {
                 let size = match lit.ty {
                     HirTy::Float(f) => f.size_in_bits,
+                    HirTy::LiteralFloat(f) => f.get_float_ty().size_in_bits,
                     _ => {
                         return Err(unsupported_expr(lit.span, format!("{:?}", expr)));
                     }
