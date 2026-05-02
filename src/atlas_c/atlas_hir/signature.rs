@@ -42,7 +42,7 @@ pub struct HirStructSignature<'hir> {
     /// Generic type parameter names
     pub generics: Vec<&'hir HirGenericConstraint<'hir>>,
     /// This is enough to know if the class implement them or not
-    pub operators: Vec<HirBinaryOperator>,
+    pub operators: BTreeMap<HirOverloadableOperatorKind, HirStructMethodSignature<'hir>>,
     pub constants: BTreeMap<&'hir str, &'hir HirStructConstantSignature<'hir>>,
     /// This optional is always Some() after the syntax lowering pass.
     /// It's only optional, because at the beginning of the pass, the destructor might not exist yet
@@ -66,6 +66,120 @@ pub struct HirStructSignature<'hir> {
     pub c_name: Option<&'hir str>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct HirOverloadableOperator {
+    // Where it's implemented or requested
+    pub span: Span,
+    pub kind: HirOverloadableOperatorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HirOverloadableOperatorKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Neg,
+    Not,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Eq,
+    NEq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+}
+
+impl From<HirBinaryOperator> for HirOverloadableOperatorKind {
+    fn from(op: HirBinaryOperator) -> Self {
+        match op {
+            HirBinaryOperator::Add => HirOverloadableOperatorKind::Add,
+            HirBinaryOperator::Sub => HirOverloadableOperatorKind::Sub,
+            HirBinaryOperator::Mul => HirOverloadableOperatorKind::Mul,
+            HirBinaryOperator::Div => HirOverloadableOperatorKind::Div,
+            HirBinaryOperator::Mod => HirOverloadableOperatorKind::Mod,
+            HirBinaryOperator::And => HirOverloadableOperatorKind::And,
+            HirBinaryOperator::Or => HirOverloadableOperatorKind::Or,
+            HirBinaryOperator::BinXor => HirOverloadableOperatorKind::Xor,
+            HirBinaryOperator::ShL => HirOverloadableOperatorKind::Shl,
+            HirBinaryOperator::ShR => HirOverloadableOperatorKind::Shr,
+            HirBinaryOperator::Eq => HirOverloadableOperatorKind::Eq,
+            HirBinaryOperator::Neq => HirOverloadableOperatorKind::NEq,
+            HirBinaryOperator::Lt => HirOverloadableOperatorKind::Lt,
+            HirBinaryOperator::Lte => HirOverloadableOperatorKind::Lte,
+            HirBinaryOperator::Gt => HirOverloadableOperatorKind::Gt,
+            HirBinaryOperator::Gte => HirOverloadableOperatorKind::Gte,
+            _ => panic!("Unsupported binary operator for overloading: {:?}", op),
+        }
+    }
+}
+
+impl From<HirUnaryOp> for HirOverloadableOperatorKind {
+    fn from(op: HirUnaryOp) -> Self {
+        match op {
+            HirUnaryOp::Neg => HirOverloadableOperatorKind::Neg,
+            HirUnaryOp::Not => HirOverloadableOperatorKind::Not,
+            _ => panic!("Unsupported unary operator for overloading: {:?}", op),
+        }
+    }
+}
+
+impl Into<String> for HirOverloadableOperatorKind {
+    fn into(self) -> String {
+        match self {
+            HirOverloadableOperatorKind::Add => "add".to_string(),
+            HirOverloadableOperatorKind::Sub => "sub".to_string(),
+            HirOverloadableOperatorKind::Mul => "mul".to_string(),
+            HirOverloadableOperatorKind::Div => "div".to_string(),
+            HirOverloadableOperatorKind::Mod => "mod".to_string(),
+            HirOverloadableOperatorKind::Neg => "neg".to_string(),
+            HirOverloadableOperatorKind::Not => "not".to_string(),
+            HirOverloadableOperatorKind::And => "and".to_string(),
+            HirOverloadableOperatorKind::Or => "or".to_string(),
+            HirOverloadableOperatorKind::Xor => "xor".to_string(),
+            HirOverloadableOperatorKind::Shl => "shl".to_string(),
+            HirOverloadableOperatorKind::Shr => "shr".to_string(),
+            HirOverloadableOperatorKind::Eq => "equal".to_string(),
+            HirOverloadableOperatorKind::NEq => "not_equal".to_string(),
+            HirOverloadableOperatorKind::Lt => "less".to_string(),
+            HirOverloadableOperatorKind::Lte => "less_equal".to_string(),
+            HirOverloadableOperatorKind::Gt => "greater".to_string(),
+            HirOverloadableOperatorKind::Gte => "greater_equal".to_string(),
+        }
+    }
+}
+
+impl From<&str> for HirOverloadableOperatorKind {
+    fn from(s: &str) -> Self {
+        match s {
+            "add" => HirOverloadableOperatorKind::Add,
+            "sub" => HirOverloadableOperatorKind::Sub,
+            "mul" => HirOverloadableOperatorKind::Mul,
+            "div" => HirOverloadableOperatorKind::Div,
+            "mod" => HirOverloadableOperatorKind::Mod,
+            "neg" => HirOverloadableOperatorKind::Neg,
+            "not" => HirOverloadableOperatorKind::Not,
+            "and" => HirOverloadableOperatorKind::And,
+            "or" => HirOverloadableOperatorKind::Or,
+            "xor" => HirOverloadableOperatorKind::Xor,
+            "shl" => HirOverloadableOperatorKind::Shl,
+            "shr" => HirOverloadableOperatorKind::Shr,
+            "equal" => HirOverloadableOperatorKind::Eq,
+            "not_equal" => HirOverloadableOperatorKind::NEq,
+            "less" => HirOverloadableOperatorKind::Lt,
+            "less_equal" => HirOverloadableOperatorKind::Lte,
+            "greater" => HirOverloadableOperatorKind::Gt,
+            "greater_equal" => HirOverloadableOperatorKind::Gte,
+            _ => panic!("Unknown operator kind: {}", s),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct HirGenericConstraint<'hir> {
     pub span: Span,
@@ -77,11 +191,20 @@ pub struct HirGenericConstraint<'hir> {
 #[derive(Debug, Clone)]
 pub enum HirGenericConstraintKind<'hir> {
     // e.g. std::copyable
-    Std { name: &'hir str, span: Span },
+    Std {
+        name: &'hir str,
+        span: Span,
+    },
     // e.g. operator overloading
-    Operator { op: HirBinaryOperator, span: Span },
+    Operator {
+        op: HirOverloadableOperator,
+        span: Span,
+    },
     // e.g. user-defined concepts
-    Concept { name: &'hir str, span: Span },
+    Concept {
+        name: &'hir str,
+        span: Span,
+    },
 }
 
 impl Display for HirGenericConstraintKind<'_> {

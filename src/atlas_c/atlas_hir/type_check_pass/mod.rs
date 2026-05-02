@@ -6,15 +6,17 @@ use super::{
     expr,
     stmt::{HirBlock, HirExprStmt, HirStatement},
 };
-use crate::atlas_c::atlas_hir::pretty_print::HirPrettyPrinter;
 use crate::atlas_c::atlas_hir::signature::{
     HirFunctionParameterSignature, HirFunctionSignature, HirMethodAttribute,
-    HirStructDestructorSignature, HirStructFieldSignature, HirStructMethodModifier,
-    HirStructSignature, HirVisibility,
+    HirOverloadableOperatorKind, HirStructDestructorSignature, HirStructFieldSignature,
+    HirStructMethodModifier, HirStructSignature, HirVisibility,
 };
 use crate::atlas_c::atlas_hir::special_methods::{
     INTRINSIC_PRIMITIVE_COPY, INTRINSIC_PRIMITIVE_DEFAULT, INTRINSIC_PRIMITIVE_HASH,
     SpecialMethodKind, SpecialMethodReceiver, primitive_special_call_descriptor,
+};
+use crate::atlas_c::atlas_hir::{
+    error::OperatorIsNotImplementedForThisTypeError, pretty_print::HirPrettyPrinter,
 };
 use crate::atlas_c::atlas_hir::{
     error::{
@@ -543,6 +545,22 @@ impl<'hir> TypeChecker<'hir> {
             self.record_result(result);
         }
 
+        for operator in &mut class.operators {
+            if operator.signature.generics.is_some() || !operator.signature.is_instantiated {
+                continue;
+            }
+            self.current_class_name = Some(class.name);
+            self.current_func_name = Some(operator.name);
+            eprintln!(
+                "Checking operator {} for class {}",
+                operator.name, class.name
+            );
+            self.context_functions.push(HashMap::new());
+            let result =
+                self.check_method(operator, class.signature.nullable_attribute_span.is_some());
+            self.record_result(result);
+        }
+
         if let Some(destructor) = class.destructor.as_mut() {
             self.current_func_name = Some("__dtor");
             let result = self.check_destructor(destructor);
@@ -848,11 +866,19 @@ impl<'hir> TypeChecker<'hir> {
                 let (expected_ret_ty, span) = if let Some(name) = self.current_class_name {
                     //This means we're in a class method
                     let class = self.signature.structs.get(name).unwrap();
-                    let method = class.methods.get(self.current_func_name.unwrap()).unwrap();
-                    (
-                        self.arena.intern(method.clone().return_ty) as &_,
-                        method.return_ty_span.unwrap_or(ret.span),
-                    )
+                    if let Some(method) = class.methods.get(self.current_func_name.unwrap()) {
+                        (
+                            self.arena.intern(method.clone().return_ty) as &_,
+                            method.return_ty_span.unwrap_or(ret.span),
+                        )
+                    } else if let Some(op) = class.methods.get(self.current_func_name.unwrap()) {
+                        (
+                            self.arena.intern(op.clone().return_ty) as &_,
+                            op.return_ty_span.unwrap_or(ret.span),
+                        )
+                    } else {
+                        (self.arena.types().get_uninitialized_ty(), ret.span)
+                    }
                 } else if let Some(name) = self.current_func_name {
                     //This means we're in a standalone function
                     let func_ret_from = self.signature.functions.get(name).unwrap();
@@ -1272,17 +1298,24 @@ impl<'hir> TypeChecker<'hir> {
                     return Ok(mutable_self_ty);
                 }
 
+                // Check both methods and operators
                 let method = match class.methods.get(function_name) {
                     Some(method) => method,
                     None => {
-                        let path = expr.span().path;
-                        let src = utils::get_file_content(path).unwrap();
-                        return Err(HirError::UnknownMethod(UnknownMethodError {
-                            method_name: function_name.to_string(),
-                            ty_name: class.name.to_string(),
-                            span: expr.span(),
-                            src: NamedSource::new(path, src),
-                        }));
+                        // Try to find it in operators
+                        match class.operators.get(&function_name.into()) {
+                            Some(op_method) => op_method,
+                            None => {
+                                let path = expr.span().path;
+                                let src = utils::get_file_content(path).unwrap();
+                                return Err(HirError::UnknownMethod(UnknownMethodError {
+                                    method_name: function_name.to_string(),
+                                    ty_name: class.name.to_string(),
+                                    span: expr.span(),
+                                    src: NamedSource::new(path, src),
+                                }));
+                            }
+                        }
                     }
                 };
                 match method.modifier {
@@ -1328,6 +1361,13 @@ impl<'hir> TypeChecker<'hir> {
             }
             HirExpr::Unary(u) => {
                 let ty = self.check_expr(&mut u.expr)?;
+                if let Some(op) = u.op
+                    && !ty.is_primitive()
+                {
+                    u.ty = self.check_unary_operator_overloading((ty, u.span), op.into())?;
+                    u.is_overloaded = true;
+                    return Ok(u.ty);
+                }
                 match u.op {
                     Some(expr::HirUnaryOp::Neg) => {
                         if !TypeChecker::is_arithmetic_type(ty) {
@@ -1494,6 +1534,15 @@ impl<'hir> TypeChecker<'hir> {
             HirExpr::HirBinaryOperation(b) => {
                 let lhs = self.check_expr(&mut b.lhs)?;
                 let rhs = self.check_expr(&mut b.rhs)?;
+                if !lhs.is_primitive() && !rhs.is_primitive() {
+                    b.ty = self.check_operator_overloading(
+                        (lhs, b.lhs.span()),
+                        (rhs, b.rhs.span()),
+                        b.op.into(),
+                    )?;
+                    b.is_overloaded = true;
+                    return Ok(b.ty);
+                }
 
                 let is_integer_like = |ty: &HirTy<'hir>| {
                     matches!(
@@ -1518,11 +1567,11 @@ impl<'hir> TypeChecker<'hir> {
                             return Ok(rhs);
                         }
                     }
-                    HirBinaryOperator::Sub => {
-                        if matches!(lhs, HirTy::PtrTy(_)) && is_integer_like(rhs) {
-                            b.ty = lhs;
-                            return Ok(lhs);
-                        }
+                    HirBinaryOperator::Sub
+                        if matches!(lhs, HirTy::PtrTy(_)) && is_integer_like(rhs) =>
+                    {
+                        b.ty = lhs;
+                        return Ok(lhs);
                     }
                     _ => {}
                 }
@@ -2073,7 +2122,13 @@ impl<'hir> TypeChecker<'hir> {
                             )
                         };
 
-                        let method = class.methods.get(lookup_method_name);
+                        let method = if let Some(method) = class.methods.get(lookup_method_name) {
+                            Some(method)
+                        } else if let Some(op) = class.operators.get(&lookup_method_name.into()) {
+                            Some(op)
+                        } else {
+                            None
+                        };
 
                         if let Some(method_sig) = method {
                             if !method_sig.is_instantiated {
@@ -2624,6 +2679,70 @@ impl<'hir> TypeChecker<'hir> {
                 Ok(ty)
             }
         }
+    }
+
+    fn check_operator_overloading(
+        &self,
+        (lhs_ty, lhs_span): (&'hir HirTy<'hir>, Span),
+        (rhs_ty, rhs_span): (&'hir HirTy<'hir>, Span),
+        op: HirOverloadableOperatorKind,
+    ) -> HirResult<&'hir HirTy<'hir>> {
+        // Temporary solution:
+        self.is_equivalent_ty(lhs_ty, lhs_span, rhs_ty, rhs_span)?;
+        if let HirTy::Named(n) = lhs_ty
+            && let Some(struct_signature) = self.signature.structs.get(n.name)
+            && struct_signature.operators.contains_key(&op)
+        {
+            return Ok(lhs_ty);
+        } else if let HirTy::Generic(g) = lhs_ty
+            && let Some(struct_signature) = self.signature.structs.get(g.name)
+            && struct_signature.operators.contains_key(&op)
+        {
+            return Ok(lhs_ty);
+        }
+
+        Err(HirError::OperatorIsNotImplementedForThisType(
+            OperatorIsNotImplementedForThisTypeError {
+                operator: format!("{:?}", op),
+                ty: format!("{}", lhs_ty),
+                span: rhs_span,
+                src: NamedSource::new(
+                    rhs_span.path,
+                    utils::get_file_content(rhs_span.path).unwrap(),
+                ),
+            },
+        ))
+    }
+
+    fn check_unary_operator_overloading(
+        &self,
+        (ty, span): (&'hir HirTy<'hir>, Span),
+        op: HirUnaryOp,
+    ) -> HirResult<&'hir HirTy<'hir>> {
+        if let HirTy::Named(n) = ty
+            && let Some(struct_signature) = self.signature.structs.get(n.name)
+            && struct_signature
+                .operators
+                .contains_key(&HirOverloadableOperatorKind::from(op))
+        {
+            return Ok(ty);
+        } else if let HirTy::Generic(g) = ty
+            && let Some(struct_signature) = self.signature.structs.get(g.name)
+            && struct_signature
+                .operators
+                .contains_key(&HirOverloadableOperatorKind::from(op))
+        {
+            return Ok(ty);
+        }
+
+        Err(HirError::OperatorIsNotImplementedForThisType(
+            OperatorIsNotImplementedForThisTypeError {
+                operator: format!("{:?}", op),
+                ty: format!("{}", ty),
+                span,
+                src: NamedSource::new(span.path, utils::get_file_content(span.path).unwrap()),
+            },
+        ))
     }
 
     fn is_primitive_special_receiver_ty(&self, ty: &HirTy<'hir>) -> bool {
@@ -4062,11 +4181,9 @@ impl<'hir> TypeChecker<'hir> {
                 if matches!(u.op, Some(HirUnaryOp::AsRef)) {
                     // Check what we're taking a pointer to
                     match u.expr.as_ref() {
-                        HirExpr::Ident(ident) => {
-                            // Check if this is a local variable (not a function parameter)
-                            if self.is_local_variable(ident.name) {
-                                return vec![ident.name];
-                            }
+                        // Check if this is a local variable (not a function parameter)
+                        HirExpr::Ident(ident) if self.is_local_variable(ident.name) => {
+                            return vec![ident.name];
                         }
                         HirExpr::FieldAccess(fa) => {
                             // Check if the base object is a local variable

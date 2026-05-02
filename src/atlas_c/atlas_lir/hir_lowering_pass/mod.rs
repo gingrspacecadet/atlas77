@@ -9,7 +9,7 @@ use crate::atlas_c::{
         expr::{HirBinaryOperator, HirExpr, HirUnaryOp},
         item::{HirFunction, HirStruct, HirStructDestructor, HirStructMethod, HirUnion},
         monomorphization_pass::MonomorphizationPass,
-        signature::{ConstantValue, HirStructMethodModifier},
+        signature::{ConstantValue, HirOverloadableOperatorKind, HirStructMethodModifier},
         special_methods::{
             INTRINSIC_PRIMITIVE_COPY, INTRINSIC_PRIMITIVE_DEFAULT, INTRINSIC_PRIMITIVE_HASH,
         },
@@ -227,6 +227,11 @@ impl<'hir> HirLoweringPass<'hir> {
         for method in struct_body.methods.iter() {
             let lir_method = self.lower_method(struct_body.name, method)?;
             functions.push(lir_method);
+        }
+
+        for operator in struct_body.operators.iter() {
+            let lir_operator = self.lower_method(struct_body.name, operator)?;
+            functions.push(lir_operator);
         }
 
         if let Some(destructor) = &struct_body.destructor {
@@ -840,53 +845,92 @@ impl<'hir> HirLoweringPass<'hir> {
                 }
             }
 
-            HirExpr::Unary(unary) => match unary.op {
-                Some(HirUnaryOp::Deref) => {
+            HirExpr::Unary(unary) => {
+                if unary.is_overloaded
+                    && let Some(op) = unary.op
+                {
                     let expr_operand = self.lower_expr(&unary.expr)?;
-                    Ok(LirOperand::Deref(Box::new(expr_operand)))
-                }
-                Some(HirUnaryOp::AsRef) => {
-                    let expr_operand = self.lower_expr(&unary.expr)?;
-                    Ok(LirOperand::AsRef(Box::new(expr_operand)))
-                }
-                Some(HirUnaryOp::Neg) => {
-                    let expr_operand = self.lower_expr(&unary.expr)?;
+
                     let dest = self.new_temp();
-                    let ty = self.hir_ty_to_lir_ty(unary.ty, unary.span);
-                    self.emit(LirInstr::Negate {
-                        ty,
-                        dest: dest.clone(),
-                        src: expr_operand,
+                    self.emit(LirInstr::Call {
+                        ty: self.hir_ty_to_lir_ty(unary.ty, unary.span),
+                        dst: Some(dest.clone()),
+                        func_name: format!(
+                            "{}_{}",
+                            unary.ty.get_valid_c_string(),
+                            Into::<String>::into(Into::<HirOverloadableOperatorKind>::into(op))
+                        ),
+                        args: vec![LirOperand::AsRef(Box::new(expr_operand))],
                     })?;
-                    Ok(dest)
+                    return Ok(dest);
                 }
-                Some(HirUnaryOp::Not) => {
-                    let expr_operand = self.lower_expr(&unary.expr)?;
-                    let dest = self.new_temp();
-                    let ty = self.hir_ty_to_lir_ty(unary.ty, unary.span);
-                    if ty == LirTy::Boolean {
-                        self.emit(LirInstr::Not {
-                            ty,
-                            dest: dest.clone(),
-                            src: expr_operand,
-                        })?;
-                    } else {
-                        self.emit(LirInstr::BinaryNot {
-                            ty,
-                            dest: dest.clone(),
-                            src: expr_operand,
-                        })?;
+                match unary.op {
+                    Some(HirUnaryOp::Deref) => {
+                        let expr_operand = self.lower_expr(&unary.expr)?;
+                        Ok(LirOperand::Deref(Box::new(expr_operand)))
                     }
-                    Ok(dest)
+                    Some(HirUnaryOp::AsRef) => {
+                        let expr_operand = self.lower_expr(&unary.expr)?;
+                        Ok(LirOperand::AsRef(Box::new(expr_operand)))
+                    }
+                    Some(HirUnaryOp::Neg) => {
+                        let expr_operand = self.lower_expr(&unary.expr)?;
+                        let dest = self.new_temp();
+                        let ty = self.hir_ty_to_lir_ty(unary.ty, unary.span);
+                        self.emit(LirInstr::Negate {
+                            ty,
+                            dest: dest.clone(),
+                            src: expr_operand,
+                        })?;
+                        Ok(dest)
+                    }
+                    Some(HirUnaryOp::Not) => {
+                        let expr_operand = self.lower_expr(&unary.expr)?;
+                        let dest = self.new_temp();
+                        let ty = self.hir_ty_to_lir_ty(unary.ty, unary.span);
+                        if ty == LirTy::Boolean {
+                            self.emit(LirInstr::Not {
+                                ty,
+                                dest: dest.clone(),
+                                src: expr_operand,
+                            })?;
+                        } else {
+                            self.emit(LirInstr::BinaryNot {
+                                ty,
+                                dest: dest.clone(),
+                                src: expr_operand,
+                            })?;
+                        }
+                        Ok(dest)
+                    }
+                    _ => self.lower_expr(&unary.expr),
                 }
-                _ => self.lower_expr(&unary.expr),
-            },
+            }
 
             // === Binary operations ===
             HirExpr::HirBinaryOperation(binop) => {
                 let lhs = self.lower_expr(&binop.lhs)?;
                 let rhs = self.lower_expr(&binop.rhs)?;
                 let dest = self.new_temp();
+
+                if binop.is_overloaded {
+                    self.emit(LirInstr::Call {
+                        ty: self.hir_ty_to_lir_ty(binop.ty, binop.span),
+                        dst: Some(dest.clone()),
+                        func_name: format!(
+                            "{}_{}",
+                            binop.ty.get_valid_c_string(),
+                            Into::<String>::into(Into::<HirOverloadableOperatorKind>::into(
+                                binop.op
+                            ))
+                        ),
+                        args: vec![
+                            LirOperand::AsRef(Box::new(lhs)),
+                            LirOperand::AsRef(Box::new(rhs)),
+                        ],
+                    })?;
+                    return Ok(dest);
+                }
 
                 let ty = self.hir_ty_to_lir_ty(binop.ty, binop.span);
 

@@ -61,6 +61,7 @@ pub struct HirStruct<'hir> {
     pub name_span: Span,
     pub signature: HirStructSignature<'hir>,
     pub methods: Vec<HirStructMethod<'hir>>,
+    pub operators: Vec<HirStructMethod<'hir>>,
     pub fields: Vec<HirStructFieldSignature<'hir>>,
     pub destructor: Option<HirStructDestructor<'hir>>,
     pub vis: HirVisibility,

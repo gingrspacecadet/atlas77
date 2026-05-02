@@ -86,6 +86,8 @@ declare_error_type! {
         IncorrectIntrinsicCallArguments(IncorrectIntrinsicCallArgumentsError),
         CannotAccessFieldOfPointers(CannotAccessFieldOfPointersError),
         ReservedVariableName(ReservedVariableNameError),
+        UnknownOverloadableOperator(UnknownOverloadableOperatorError),
+        OperatorIsNotImplementedForThisType(OperatorIsNotImplementedForThisTypeError),
     }
 }
 
@@ -1240,6 +1242,37 @@ pub struct IncorrectIntrinsicCallArgumentsError {
 #[error("Cannot access a struct field directly from a pointer")]
 pub struct CannotAccessFieldOfPointersError {
     #[label = "Try using `->` instead of `.`"]
+    pub span: Span,
+    #[source_code]
+    pub src: NamedSource<String>,
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(
+    code(sema::unknown_overloadable_operator),
+    help("ensure the operator is one of the allowed overloadable operators")
+)]
+#[error(
+    "The operator `{operator}` is not a recognized overloadable operator in Atlas. Only the following operators can be overloaded: 'add', 'sub', 'mul', 'div', 'rem', 'neg', 'not', 'and', 'or', 'xor', 'shl', 'shr', 'equal', 'not_equal', 'less', 'less_equal', 'greater', 'greater_equal',"
+)]
+pub struct UnknownOverloadableOperatorError {
+    pub operator: String,
+    #[label = "unknown overloadable operator `{operator}`"]
+    pub span: Span,
+    #[source_code]
+    pub src: NamedSource<String>,
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(
+    code(sema::operator_not_implemented_for_this_type),
+    help("ensure the type implements the operator, or implement it if it's a user-defined type")
+)]
+#[error("The operator `{operator}` is not implemented for type `{ty}`")]
+pub struct OperatorIsNotImplementedForThisTypeError {
+    pub operator: String,
+    pub ty: String,
+    #[label = "operator `{operator}` is not implemented for type `{ty}`"]
     pub span: Span,
     #[source_code]
     pub src: NamedSource<String>,

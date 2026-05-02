@@ -1166,16 +1166,16 @@ impl<'hir> MonomorphizationPass<'hir> {
                 // Check each constraint kind
                 for constraint_kind in &constraint.kind {
                     match constraint_kind {
-                        HirGenericConstraintKind::Std { name, .. } => {
-                            // Check std::copyable constraint
+                        // Check std::copyable constraint
+                        HirGenericConstraintKind::Std { name, .. }
                             if *name == "copyable"
                                 && !self
                                     .generic_pool
-                                    .implements_std_copyable(module_sig, concrete_type)
-                            {
-                                return false;
-                            }
+                                    .implements_std_copyable(module_sig, concrete_type) =>
+                        {
+                            return false;
                         }
+
                         // Add more std constraints here as needed
                         // Once there is more std constraints, consider refactoring to a match statement
 

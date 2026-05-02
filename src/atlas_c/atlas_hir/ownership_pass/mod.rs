@@ -72,6 +72,10 @@ impl<'hir> HirOwnershipPass<'hir> {
                 self.run_ownership_for_body(&mut method.body, &method.signature.params);
             }
 
+            for operator in &mut strukt.operators {
+                self.run_ownership_for_body(&mut operator.body, &operator.signature.params);
+            }
+
             if let Some(destructor) = &mut strukt.destructor {
                 self.run_ownership_for_body(&mut destructor.body, &[]);
             }

@@ -149,11 +149,9 @@ impl<'ast> Parser<'ast> {
                 }
                 // In some cases, like size_of<[int64; N]>(), we should check if we are at l_bracket_depth > 1;
                 // TODO: There might still be some weirdly ambiguous posibility.
-                TokenKind::Semicolon => {
-                    if bracket_depth == 0 {
-                        // In this case, we are sure
-                        return false;
-                    }
+                TokenKind::Semicolon if bracket_depth == 0 => {
+                    // In this case, we are sure
+                    return false;
                 }
                 // If we hit tokens that definitely indicate this is not a generic type, bail out
                 TokenKind::RBrace => return false,
@@ -1046,53 +1044,94 @@ impl<'ast> Parser<'ast> {
     }
 
     fn parse_operator(&mut self) -> ParseResult<AstOperatorOverload<'ast>> {
-        self.expect(TokenKind::KwOperator)?;
-        let tok_op = self.current().clone();
-        let op = match tok_op.kind() {
-            TokenKind::LAngle if self.peek() == Some(TokenKind::LAngle) => {
-                let _ = self.advance();
-                let _ = self.advance();
-                AstBinaryOp::ShL
-            }
-            TokenKind::RAngle if self.peek() == Some(TokenKind::RAngle) => {
-                let _ = self.advance();
-                let _ = self.advance();
-                AstBinaryOp::ShR
-            }
-            _ => {
-                let op: Result<AstBinaryOp, _> = tok_op.kind().try_into();
-                match op {
-                    Ok(op) => {
-                        let _ = self.advance();
-                        op
-                    }
-                    Err(_) => {
-                        return Err(self.unexpected_token_error(
-                            TokenVec(vec![TokenKind::Identifier("Binary Operator".to_string())]),
-                            &tok_op.span,
-                        ));
-                    }
-                }
-            }
-        };
+        let _ = self.advance();
+        let name = self.parse_identifier()?;
+        let generics = self.eat_if(
+            TokenKind::LAngle,
+            |p| {
+                let value = p.eat_until(TokenKind::RAngle, |parser| {
+                    parser.eat_if(TokenKind::Comma, |_| Ok(()), ())?;
+                    parser.parse_generic()
+                });
+                p.expect(TokenKind::RAngle)?;
+                value
+            },
+            vec![],
+        )?;
         self.expect(TokenKind::LParen)?;
         let mut params = vec![];
+
+        let modifier = if self.current().kind() != TokenKind::RParen {
+            let obj_field = self.parse_arg()?;
+            match obj_field.ty {
+                AstType::ThisTy(_) => AstMethodModifier::Consuming,
+                AstType::PtrTy(AstPtrTy {
+                    inner: AstType::ThisTy(_),
+                    is_const: true,
+                    ..
+                }) => AstMethodModifier::Const,
+                AstType::PtrTy(AstPtrTy {
+                    inner: AstType::ThisTy(_),
+                    is_const: false,
+                    ..
+                }) => AstMethodModifier::Mutable,
+                _ => {
+                    params.push(obj_field);
+                    AstMethodModifier::Static
+                }
+            }
+        } else {
+            AstMethodModifier::Static
+        };
+        if self.current().kind() == TokenKind::Comma {
+            let _ = self.advance();
+        }
+
+        // Parse parameters
         while self.current().kind() != TokenKind::RParen {
-            params.push(self.parse_obj_field()?);
+            let obj_field = self.parse_arg()?;
+            if let AstType::ThisTy(_) = obj_field.ty {
+                return Err(self.unexpected_token_error(
+                    TokenVec(vec![TokenKind::Identifier("Field".to_string())]),
+                    &obj_field.span,
+                ));
+            } else {
+                params.push(obj_field);
+            }
             if self.current().kind() == TokenKind::Comma {
                 let _ = self.advance();
             }
         }
-        self.expect(TokenKind::RParen)?;
-        self.expect(TokenKind::RArrow)?;
-        let ret_ty = self.parse_type()?;
+        let span = Span::union_span(&name.span, &self.expect(TokenKind::RParen)?.span);
+        // Return type
+        let mut ret_ty = AstType::Unit(AstUnitType { span });
+        if self.current().kind() == TokenKind::RArrow {
+            let _ = self.advance();
+            ret_ty = self.parse_type()?;
+        }
+        // Where clause for method
+        let where_clause = if self.current().kind() == TokenKind::KwWhere {
+            Some(self.arena.alloc_vec(self.parse_where_clause()?))
+        } else {
+            None
+        };
         let body = self.parse_block()?;
         let node = AstOperatorOverload {
-            span: Span::union_span(&tok_op.span(), &body.span),
-            op,
+            modifier,
+            span: Span::union_span(&name.span, &body.span),
+            name: self.arena.alloc(name),
+            generics: if generics.is_empty() {
+                None
+            } else {
+                Some(self.arena.alloc_vec(generics))
+            },
             args: self.arena.alloc_vec(params),
-            body: self.arena.alloc(body),
             ret: self.arena.alloc(ret_ty),
+            body: self.arena.alloc(body),
+            vis: AstVisibility::default(),
+            where_clause,
+            attributes: self.arena.alloc_vec(vec![]),
+            docstring: None,
         };
         Ok(node)
     }
@@ -1811,14 +1850,13 @@ impl<'ast> Parser<'ast> {
                     node = AstExpr::Assign(self.parse_assign(node)?);
                     return Ok(node);
                 }
+                TokenKind::LBrace if self.looks_like_obj_literal() => {
+                    //Object literal like `Point { .x = 10, .y = 20 }`
+                    node = AstExpr::ObjLiteral(self.parse_obj_literal(node, vec![])?);
+                    return Ok(node);
+                }
                 TokenKind::LBrace => {
-                    if self.looks_like_obj_literal() {
-                        //Object literal like `Point { x: 10, y: 20 }`
-                        node = AstExpr::ObjLiteral(self.parse_obj_literal(node, vec![])?);
-                        return Ok(node);
-                    } else {
-                        break;
-                    }
+                    break;
                 }
                 TokenKind::LAngle => {
                     if self.looks_like_generic_call() {
@@ -2302,23 +2340,11 @@ impl<'ast> Parser<'ast> {
         while let Some(tok) = self.tokens.get(idx) {
             match tok.kind() {
                 TokenKind::LParen => depth_paren += 1,
-                TokenKind::RParen => {
-                    if depth_paren > 0 {
-                        depth_paren -= 1
-                    }
-                }
+                TokenKind::RParen if depth_paren > 0 => depth_paren -= 1,
                 TokenKind::LBracket => depth_brack += 1,
-                TokenKind::RBracket => {
-                    if depth_brack > 0 {
-                        depth_brack -= 1
-                    }
-                }
+                TokenKind::RBracket if depth_brack > 0 => depth_brack -= 1,
                 TokenKind::LBrace => depth_brace += 1,
-                TokenKind::RBrace => {
-                    if depth_brace > 0 {
-                        depth_brace -= 1
-                    }
-                }
+                TokenKind::RBrace if depth_brace > 0 => depth_brace -= 1,
                 TokenKind::OpAssign if depth_paren == 0 && depth_brack == 0 && depth_brace == 0 => {
                     return true;
                 }

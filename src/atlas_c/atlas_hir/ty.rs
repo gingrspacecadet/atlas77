@@ -250,6 +250,7 @@ impl HirTy<'_> {
                 | HirTy::Char(_)
                 // TODO: string should not be a primitive anymore
                 | HirTy::String(_)
+                | HirTy::PtrTy(_)
         )
     }
 

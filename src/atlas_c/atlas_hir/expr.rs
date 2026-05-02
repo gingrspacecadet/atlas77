@@ -279,9 +279,10 @@ pub struct HirBinaryOpExpr<'hir> {
     pub rhs: Box<HirExpr<'hir>>,
     /// The type of the result of the expression.
     pub ty: &'hir HirTy<'hir>,
+    pub is_overloaded: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HirBinaryOperator {
     Add,
     And,
@@ -336,9 +337,10 @@ pub struct UnaryOpExpr<'hir> {
     pub expr: Box<HirExpr<'hir>>,
     /// The type of the result of the expression.
     pub ty: &'hir HirTy<'hir>,
+    pub is_overloaded: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HirUnaryOp {
     Neg,
     Not,

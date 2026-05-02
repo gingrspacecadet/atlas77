@@ -15,6 +15,7 @@ declare_warning_type!(
         UnionFieldCannotBeAutomaticallyDeleted(UnionFieldCannotBeAutomaticallyDeletedWarning),
         UnsafeRawPointerStruct(UnsafeRawPointerStructWarning),
         SpecialMethodMightHaveWrongSignature(SpecialMethodMightHaveWrongSignatureWarning),
+        MethodLooksLikeAnOperator(MethodLooksLikeAnOperatorWarning),
     }
 );
 
@@ -144,4 +145,21 @@ pub struct SpecialMethodMightHaveWrongSignatureWarning {
     pub src: NamedSource<String>,
     #[label = "Method `{method_name}` is a special method but its signature `{signature}` does not match the expected signature `{expected_signature}` for this method, which may lead to it not being recognized as a special method and not being called in certain situations"]
     pub span: Span,
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(
+    code(sema::method_looks_like_an_operator),
+    severity(warning),
+    help("Consider declaring this method as an operator if it is intended to be used as one")
+)]
+#[error(
+    "Method `{method_name}` has the same name as an operator, but isn't declared as an operator"
+)]
+pub struct MethodLooksLikeAnOperatorWarning {
+    pub method_name: String,
+    #[label = "method looks like an operator"]
+    pub span: Span,
+    #[source_code]
+    pub src: NamedSource<String>,
 }
